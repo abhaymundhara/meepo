@@ -1,0 +1,45 @@
+# Meepo Configuration
+# Copy to ~/.meepo/config.toml and fill in your values
+
+[agent]
+default_model = "claude-opus-4-6"
+max_tokens = 8192
+system_prompt_file = "SOUL.md"
+memory_file = "MEMORY.md"
+
+[providers.anthropic]
+api_key = "${ANTHROPIC_API_KEY}"
+base_url = "https://api.anthropic.com"
+
+[channels.discord]
+enabled = false
+token = "${DISCORD_BOT_TOKEN}"
+allowed_users = []
+
+[channels.slack]
+enabled = false
+app_token = "${SLACK_APP_TOKEN}"
+bot_token = "${SLACK_BOT_TOKEN}"
+
+[channels.imessage]
+enabled = false
+poll_interval_secs = 3
+trigger_prefix = "/d"
+allowed_contacts = []
+
+[knowledge]
+db_path = "~/.meepo/knowledge.db"
+tantivy_path = "~/.meepo/tantivy_index"
+
+[watchers]
+max_concurrent = 50
+min_poll_interval_secs = 30
+active_hours = { start = "08:00", end = "23:00" }
+
+[code]
+claude_code_path = "claude"
+gh_path = "gh"
+default_workspace = "~/Coding"
+
+[memory]
+workspace = "~/.meepo/workspace"

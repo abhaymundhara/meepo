@@ -1,0 +1,25 @@
+[package]
+name = "meepo-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "meepo"
+path = "src/main.rs"
+
+[dependencies]
+meepo-core = { path = "../meepo-core" }
+meepo-channels = { path = "../meepo-channels" }
+meepo-knowledge = { path = "../meepo-knowledge" }
+meepo-scheduler = { path = "../meepo-scheduler" }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }

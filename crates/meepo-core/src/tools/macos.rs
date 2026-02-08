@@ -1,0 +1,391 @@
+//! macOS-specific tools using AppleScript
+
+use async_trait::async_trait;
+use serde_json::Value;
+use anyhow::{Result, Context};
+use tokio::process::Command;
+use tracing::{debug, warn};
+
+use super::{ToolHandler, json_schema};
+
+/// Read emails from Mail.app
+pub struct ReadEmailsTool;
+
+#[async_trait]
+impl ToolHandler for ReadEmailsTool {
+    fn name(&self) -> &str {
+        "read_emails"
+    }
+
+    fn description(&self) -> &str {
+        "Read recent emails from Mail.app. Returns sender, subject, date, and preview for the latest emails."
+    }
+
+    fn input_schema(&self) -> Value {
+        json_schema(
+            serde_json::json!({
+                "limit": {
+                    "type": "number",
+                    "description": "Number of emails to retrieve (default: 10, max: 50)"
+                }
+            }),
+            vec![],
+        )
+    }
+
+    async fn execute(&self, input: Value) -> Result<String> {
+        let limit = input.get("limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(10)
+            .min(50);
+
+        debug!("Reading {} emails from Mail.app", limit);
+
+        let script = format!(r#"
+tell application "Mail"
+    try
+        set msgs to messages 1 thru {} of inbox
+        set output to ""
+        repeat with m in msgs
+            set output to output & "From: " & (sender of m) & "\n"
+            set output to output & "Subject: " & (subject of m) & "\n"
+            set output to output & "Date: " & (date received of m as string) & "\n"
+            set output to output & "---\n"
+        end repeat
+        return output
+    on error errMsg
+        return "Error: " & errMsg
+    end try
+end tell
+"#, limit);
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()
+            .await
+            .context("Failed to execute osascript")?;
+
+        if output.status.success() {
+            let result = String::from_utf8_lossy(&output.stdout).to_string();
+            Ok(result)
+        } else {
+            let error = String::from_utf8_lossy(&output.stderr).to_string();
+            warn!("Failed to read emails: {}", error);
+            Err(anyhow::anyhow!("Failed to read emails: {}", error))
+        }
+    }
+}
+
+/// Read calendar events
+pub struct ReadCalendarTool;
+
+#[async_trait]
+impl ToolHandler for ReadCalendarTool {
+    fn name(&self) -> &str {
+        "read_calendar"
+    }
+
+    fn description(&self) -> &str {
+        "Read calendar events from Calendar.app. Returns today's and upcoming events."
+    }
+
+    fn input_schema(&self) -> Value {
+        json_schema(
+            serde_json::json!({
+                "days_ahead": {
+                    "type": "number",
+                    "description": "Number of days ahead to look (default: 1)"
+                }
+            }),
+            vec![],
+        )
+    }
+
+    async fn execute(&self, input: Value) -> Result<String> {
+        let days_ahead = input.get("days_ahead")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1);
+
+        debug!("Reading calendar events for next {} days", days_ahead);
+
+        let script = format!(r#"
+tell application "Calendar"
+    try
+        set startDate to current date
+        set endDate to (current date) + ({} * days)
+        set theEvents to (every event of calendar "Calendar" whose start date is greater than or equal to startDate and start date is less than or equal to endDate)
+        set output to ""
+        repeat with evt in theEvents
+            set output to output & "Event: " & (summary of evt) & "\n"
+            set output to output & "Start: " & (start date of evt as string) & "\n"
+            set output to output & "End: " & (end date of evt as string) & "\n"
+            set output to output & "---\n"
+        end repeat
+        return output
+    on error errMsg
+        return "Error: " & errMsg
+    end try
+end tell
+"#, days_ahead);
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()
+            .await
+            .context("Failed to execute osascript")?;
+
+        if output.status.success() {
+            let result = String::from_utf8_lossy(&output.stdout).to_string();
+            Ok(result)
+        } else {
+            let error = String::from_utf8_lossy(&output.stderr).to_string();
+            warn!("Failed to read calendar: {}", error);
+            Err(anyhow::anyhow!("Failed to read calendar: {}", error))
+        }
+    }
+}
+
+/// Send email via Mail.app
+pub struct SendEmailTool;
+
+#[async_trait]
+impl ToolHandler for SendEmailTool {
+    fn name(&self) -> &str {
+        "send_email"
+    }
+
+    fn description(&self) -> &str {
+        "Send an email using Mail.app. Composes and sends a message to the specified recipient."
+    }
+
+    fn input_schema(&self) -> Value {
+        json_schema(
+            serde_json::json!({
+                "to": {
+                    "type": "string",
+                    "description": "Recipient email address"
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Email subject"
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Email body content"
+                }
+            }),
+            vec!["to", "subject", "body"],
+        )
+    }
+
+    async fn execute(&self, input: Value) -> Result<String> {
+        let to = input.get("to")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'to' parameter"))?;
+        let subject = input.get("subject")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'subject' parameter"))?;
+        let body = input.get("body")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'body' parameter"))?;
+
+        debug!("Sending email to: {}", to);
+
+        let script = format!(r#"
+tell application "Mail"
+    try
+        set newMessage to make new outgoing message with properties {{subject:"{}", content:"{}", visible:true}}
+        tell newMessage
+            make new to recipient at end of to recipients with properties {{address:"{}"}}
+            send
+        end tell
+        return "Email sent successfully"
+    on error errMsg
+        return "Error: " & errMsg
+    end try
+end tell
+"#, subject.replace('"', "\\\""), body.replace('"', "\\\""), to);
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()
+            .await
+            .context("Failed to execute osascript")?;
+
+        if output.status.success() {
+            let result = String::from_utf8_lossy(&output.stdout).to_string();
+            Ok(result)
+        } else {
+            let error = String::from_utf8_lossy(&output.stderr).to_string();
+            warn!("Failed to send email: {}", error);
+            Err(anyhow::anyhow!("Failed to send email: {}", error))
+        }
+    }
+}
+
+/// Create calendar event
+pub struct CreateEventTool;
+
+#[async_trait]
+impl ToolHandler for CreateEventTool {
+    fn name(&self) -> &str {
+        "create_calendar_event"
+    }
+
+    fn description(&self) -> &str {
+        "Create a new calendar event in Calendar.app."
+    }
+
+    fn input_schema(&self) -> Value {
+        json_schema(
+            serde_json::json!({
+                "summary": {
+                    "type": "string",
+                    "description": "Event title/summary"
+                },
+                "start_time": {
+                    "type": "string",
+                    "description": "Start time in ISO8601 format or natural language"
+                },
+                "duration_minutes": {
+                    "type": "number",
+                    "description": "Duration in minutes (default: 60)"
+                }
+            }),
+            vec!["summary", "start_time"],
+        )
+    }
+
+    async fn execute(&self, input: Value) -> Result<String> {
+        let summary = input.get("summary")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'summary' parameter"))?;
+        let start_time = input.get("start_time")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'start_time' parameter"))?;
+        let duration = input.get("duration_minutes")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(60);
+
+        debug!("Creating calendar event: {}", summary);
+
+        let script = format!(r#"
+tell application "Calendar"
+    try
+        set startDate to date "{}"
+        set endDate to startDate + ({} * minutes)
+        tell calendar "Calendar"
+            make new event with properties {{summary:"{}", start date:startDate, end date:endDate}}
+        end tell
+        return "Event created successfully"
+    on error errMsg
+        return "Error: " & errMsg
+    end try
+end tell
+"#, start_time, duration, summary.replace('"', "\\\""));
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()
+            .await
+            .context("Failed to execute osascript")?;
+
+        if output.status.success() {
+            let result = String::from_utf8_lossy(&output.stdout).to_string();
+            Ok(result)
+        } else {
+            let error = String::from_utf8_lossy(&output.stderr).to_string();
+            warn!("Failed to create event: {}", error);
+            Err(anyhow::anyhow!("Failed to create event: {}", error))
+        }
+    }
+}
+
+/// Open application
+pub struct OpenAppTool;
+
+#[async_trait]
+impl ToolHandler for OpenAppTool {
+    fn name(&self) -> &str {
+        "open_app"
+    }
+
+    fn description(&self) -> &str {
+        "Open a macOS application by name."
+    }
+
+    fn input_schema(&self) -> Value {
+        json_schema(
+            serde_json::json!({
+                "app_name": {
+                    "type": "string",
+                    "description": "Name of the application to open (e.g., 'Safari', 'Terminal')"
+                }
+            }),
+            vec!["app_name"],
+        )
+    }
+
+    async fn execute(&self, input: Value) -> Result<String> {
+        let app_name = input.get("app_name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'app_name' parameter"))?;
+
+        debug!("Opening application: {}", app_name);
+
+        let output = Command::new("open")
+            .arg("-a")
+            .arg(app_name)
+            .output()
+            .await
+            .context("Failed to execute open command")?;
+
+        if output.status.success() {
+            Ok(format!("Successfully opened {}", app_name))
+        } else {
+            let error = String::from_utf8_lossy(&output.stderr).to_string();
+            warn!("Failed to open app: {}", error);
+            Err(anyhow::anyhow!("Failed to open app: {}", error))
+        }
+    }
+}
+
+/// Get clipboard content
+pub struct GetClipboardTool;
+
+#[async_trait]
+impl ToolHandler for GetClipboardTool {
+    fn name(&self) -> &str {
+        "get_clipboard"
+    }
+
+    fn description(&self) -> &str {
+        "Get the current content of the system clipboard."
+    }
+
+    fn input_schema(&self) -> Value {
+        json_schema(serde_json::json!({}), vec![])
+    }
+
+    async fn execute(&self, _input: Value) -> Result<String> {
+        debug!("Reading clipboard content");
+
+        let output = Command::new("pbpaste")
+            .output()
+            .await
+            .context("Failed to execute pbpaste")?;
+
+        if output.status.success() {
+            let result = String::from_utf8_lossy(&output.stdout).to_string();
+            Ok(result)
+        } else {
+            let error = String::from_utf8_lossy(&output.stderr).to_string();
+            warn!("Failed to read clipboard: {}", error);
+            Err(anyhow::anyhow!("Failed to read clipboard: {}", error))
+        }
+    }
+}

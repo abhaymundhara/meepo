@@ -1,0 +1,20 @@
+[package]
+name = "meepo-channels"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+meepo-core = { path = "../meepo-core" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+async-trait = { workspace = true }
+serenity = { workspace = true }
+rusqlite = { workspace = true }
+dashmap = "6.1"
+dirs = "5.0"

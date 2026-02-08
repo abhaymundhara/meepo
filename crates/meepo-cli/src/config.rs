@@ -1,0 +1,193 @@
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeepoConfig {
+    pub agent: AgentConfig,
+    pub providers: ProvidersConfig,
+    pub channels: ChannelsConfig,
+    pub knowledge: KnowledgeConfig,
+    pub watchers: WatchersConfig,
+    pub code: CodeConfig,
+    pub memory: MemoryConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentConfig {
+    pub default_model: String,
+    pub max_tokens: u32,
+    #[serde(default = "default_system_prompt_file")]
+    pub system_prompt_file: String,
+    #[serde(default = "default_memory_file")]
+    pub memory_file: String,
+}
+
+fn default_system_prompt_file() -> String {
+    "SOUL.md".to_string()
+}
+
+fn default_memory_file() -> String {
+    "MEMORY.md".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProvidersConfig {
+    pub anthropic: AnthropicConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnthropicConfig {
+    pub api_key: String,
+    #[serde(default = "default_base_url")]
+    pub base_url: String,
+}
+
+fn default_base_url() -> String {
+    "https://api.anthropic.com".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelsConfig {
+    pub discord: DiscordConfig,
+    pub slack: SlackConfig,
+    pub imessage: IMessageConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscordConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub token: String,
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlackConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub app_token: String,
+    #[serde(default)]
+    pub bot_token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IMessageConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_poll_interval")]
+    pub poll_interval_secs: u64,
+    #[serde(default = "default_trigger_prefix")]
+    pub trigger_prefix: String,
+    #[serde(default)]
+    pub allowed_contacts: Vec<String>,
+}
+
+fn default_poll_interval() -> u64 {
+    3
+}
+
+fn default_trigger_prefix() -> String {
+    "/d".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeConfig {
+    pub db_path: String,
+    pub tantivy_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchersConfig {
+    #[serde(default = "default_max_concurrent")]
+    pub max_concurrent: usize,
+    #[serde(default = "default_min_poll")]
+    pub min_poll_interval_secs: u64,
+    pub active_hours: ActiveHours,
+}
+
+fn default_max_concurrent() -> usize {
+    50
+}
+
+fn default_min_poll() -> u64 {
+    30
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveHours {
+    pub start: String,
+    pub end: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeConfig {
+    #[serde(default = "default_claude_path")]
+    pub claude_code_path: String,
+    #[serde(default = "default_gh_path")]
+    pub gh_path: String,
+    #[serde(default = "default_workspace")]
+    pub default_workspace: String,
+}
+
+fn default_claude_path() -> String {
+    "claude".to_string()
+}
+
+fn default_gh_path() -> String {
+    "gh".to_string()
+}
+
+fn default_workspace() -> String {
+    "~/Coding".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryConfig {
+    pub workspace: String,
+}
+
+pub fn config_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".meepo")
+}
+
+impl MeepoConfig {
+    pub fn load(custom_path: &Option<PathBuf>) -> Result<Self> {
+        let path = custom_path
+            .clone()
+            .unwrap_or_else(|| config_dir().join("config.toml"));
+
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| {
+                format!(
+                    "Failed to read config at {}. Run `meepo init` first.",
+                    path.display()
+                )
+            })?;
+
+        // Expand environment variables before parsing
+        let expanded = expand_env_vars(&content);
+
+        toml::from_str(&expanded)
+            .with_context(|| format!("Failed to parse config at {}", path.display()))
+    }
+}
+
+fn expand_env_vars(s: &str) -> String {
+    let mut result = s.to_string();
+    while let Some(start) = result.find("${") {
+        if let Some(end) = result[start..].find('}') {
+            let var_name = &result[start + 2..start + end].to_string();
+            let value = std::env::var(var_name).unwrap_or_default();
+            result = format!("{}{}{}", &result[..start], value, &result[start + end + 1..]);
+        } else {
+            break;
+        }
+    }
+    result
+}

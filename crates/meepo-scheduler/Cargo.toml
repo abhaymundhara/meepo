@@ -1,0 +1,19 @@
+[package]
+name = "meepo-scheduler"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+async-trait = { workspace = true }
+rusqlite = { workspace = true }
+notify = { workspace = true }
+cron = { workspace = true }
