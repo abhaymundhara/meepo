@@ -103,4 +103,40 @@ impl MessageBus {
     pub fn has_channel(&self, channel_type: &ChannelType) -> bool {
         self.channels.contains_key(channel_type)
     }
+
+    /// Split the bus into a receiver and a sender handle.
+    /// This allows the receiver to be used in a select! loop while the sender
+    /// is cloned into spawned tasks for routing responses.
+    pub fn split(self) -> (mpsc::Receiver<IncomingMessage>, BusSender) {
+        let sender = BusSender {
+            channels: self.channels,
+        };
+        (self.incoming_rx, sender)
+    }
+}
+
+/// Send-only handle for the message bus
+/// Separated from the receiver to allow concurrent send/receive
+pub struct BusSender {
+    channels: HashMap<ChannelType, Box<dyn MessageChannel>>,
+}
+
+impl BusSender {
+    /// Send an outgoing message to the appropriate channel
+    pub async fn send(&self, msg: OutgoingMessage) -> Result<()> {
+        let channel_type = &msg.channel;
+        debug!("Routing outgoing message to channel: {}", channel_type);
+
+        let channel = self.channels
+            .get(channel_type)
+            .ok_or_else(|| anyhow!("No channel registered for type: {}", channel_type))?;
+
+        channel.send(msg).await?;
+        Ok(())
+    }
+
+    /// Check if a specific channel type is registered
+    pub fn has_channel(&self, channel_type: &ChannelType) -> bool {
+        self.channels.contains_key(channel_type)
+    }
 }

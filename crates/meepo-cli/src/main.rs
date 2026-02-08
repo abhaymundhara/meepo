@@ -231,8 +231,8 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
     // Register Slack channel if enabled
     if cfg.channels.slack.enabled {
         let slack = meepo_channels::slack::SlackChannel::new(
-            shellexpand_str(&cfg.channels.slack.app_token),
             shellexpand_str(&cfg.channels.slack.bot_token),
+            std::time::Duration::from_secs(cfg.channels.slack.poll_interval_secs),
         );
         bus.register(Box::new(slack));
         info!("Slack channel registered");
@@ -244,6 +244,10 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
 
     println!("Meepo is running. Press Ctrl+C to stop.");
 
+    // Split bus into receiver + sender for concurrent use
+    let (mut incoming_rx, bus_sender) = bus.split();
+    let bus_sender = Arc::new(bus_sender);
+
     // Main event loop
     let agent_clone = agent.clone();
     let cancel_clone = cancel.clone();
@@ -254,7 +258,7 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
                     info!("Agent loop shutting down");
                     break;
                 }
-                msg = bus.recv() => {
+                msg = incoming_rx.recv() => {
                     match msg {
                         Some(incoming) => {
                             info!("Message from {} via {}: {}",
@@ -262,12 +266,14 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
                                 incoming.channel,
                                 &incoming.content[..incoming.content.len().min(100)]);
                             let agent = agent_clone.clone();
+                            let sender = bus_sender.clone();
                             tokio::spawn(async move {
                                 match agent.handle_message(incoming).await {
                                     Ok(response) => {
-                                        info!("Response generated ({} chars)", response.content.len());
-                                        // In a full implementation, route response back through bus
-                                        // For now, responses are logged
+                                        info!("Response generated ({} chars), routing to {}", response.content.len(), response.channel);
+                                        if let Err(e) = sender.send(response).await {
+                                            error!("Failed to route response: {}", e);
+                                        }
                                     }
                                     Err(e) => error!("Agent error: {}", e),
                                 }

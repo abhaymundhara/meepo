@@ -17,3 +17,4 @@ async-trait = { workspace = true }
 rusqlite = { workspace = true }
 notify = { workspace = true }
 cron = { workspace = true }
+reqwest = { workspace = true }

@@ -9,9 +9,12 @@ use chrono::{NaiveTime, Utc};
 use std::str::FromStr;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher};
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::process::Command;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{sleep_until, Instant};
 use tokio_util::sync::CancellationToken;
@@ -226,6 +229,8 @@ impl WatcherRunner {
                 watcher.id, interval_secs
             );
 
+            let mut poll_state = PollState::new();
+
             loop {
                 tokio::select! {
                     _ = cancel_token.cancelled() => {
@@ -255,7 +260,7 @@ impl WatcherRunner {
                         }
 
                         // Execute the poll
-                        if let Err(e) = poll_watcher(&watcher, &event_tx).await {
+                        if let Err(e) = poll_watcher(&watcher, &event_tx, &mut poll_state).await {
                             error!("Error polling watcher {}: {}", watcher.id, e);
                         }
                     }
@@ -507,10 +512,34 @@ impl WatcherRunner {
     }
 }
 
-/// Poll a watcher (placeholder implementation)
+/// State maintained across poll cycles for dedup
+struct PollState {
+    /// Hashes of previously seen items (emails, calendar events)
+    seen_hashes: HashSet<u64>,
+    /// Last GitHub event ID seen
+    last_github_event_id: Option<String>,
+}
+
+impl PollState {
+    fn new() -> Self {
+        Self {
+            seen_hashes: HashSet::new(),
+            last_github_event_id: None,
+        }
+    }
+
+    fn hash_item(s: &str) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        s.hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+/// Poll a watcher for new events
 async fn poll_watcher(
     watcher: &Watcher,
-    _event_tx: &mpsc::UnboundedSender<WatcherEvent>,
+    event_tx: &mpsc::UnboundedSender<WatcherEvent>,
+    state: &mut PollState,
 ) -> Result<()> {
     match &watcher.kind {
         WatcherKind::EmailWatch {
@@ -523,12 +552,98 @@ async fn poll_watcher(
                 watcher.id, from, subject_contains
             );
 
-            // TODO: Implement actual email polling
-            // For now, just log that we would check
-            // In a real implementation, this would:
-            // 1. Connect to email server (IMAP)
-            // 2. Search for emails matching criteria
-            // 3. Emit events for new emails
+            let script = r#"
+tell application "Mail"
+    try
+        set msgs to messages 1 thru 20 of inbox
+        set output to ""
+        repeat with m in msgs
+            set output to output & "From: " & (sender of m) & "\n"
+            set output to output & "Subject: " & (subject of m) & "\n"
+            set output to output & "Date: " & (date received of m as string) & "\n"
+            set output to output & "Body: " & (content of m as string) & "\n"
+            set output to output & "---\n"
+        end repeat
+        return output
+    on error errMsg
+        return "Error: " & errMsg
+    end try
+end tell
+"#;
+
+            let output = Command::new("osascript")
+                .arg("-e")
+                .arg(script)
+                .output()
+                .await?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                warn!("Email polling failed: {}", stderr);
+                return Ok(());
+            }
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.starts_with("Error:") {
+                warn!("Email polling returned error: {}", stdout);
+                return Ok(());
+            }
+
+            for entry in stdout.split("---\n").filter(|e| !e.trim().is_empty()) {
+                let mut email_from = String::new();
+                let mut email_subject = String::new();
+                let mut email_date = String::new();
+                let mut email_body = String::new();
+
+                for line in entry.lines() {
+                    if let Some(val) = line.strip_prefix("From: ") {
+                        email_from = val.trim().to_string();
+                    } else if let Some(val) = line.strip_prefix("Subject: ") {
+                        email_subject = val.trim().to_string();
+                    } else if let Some(val) = line.strip_prefix("Date: ") {
+                        email_date = val.trim().to_string();
+                    } else if let Some(val) = line.strip_prefix("Body: ") {
+                        email_body = val.trim().to_string();
+                    }
+                }
+
+                // Filter by criteria
+                if let Some(filter_from) = from {
+                    if !email_from.to_lowercase().contains(&filter_from.to_lowercase()) {
+                        continue;
+                    }
+                }
+                if let Some(filter_subject) = subject_contains {
+                    if !email_subject.to_lowercase().contains(&filter_subject.to_lowercase()) {
+                        continue;
+                    }
+                }
+
+                // Dedup
+                let hash_key = format!("{}|{}|{}", email_from, email_subject, email_date);
+                let hash = PollState::hash_item(&hash_key);
+                if !state.seen_hashes.insert(hash) {
+                    continue;
+                }
+
+                // Truncate body for the event
+                let body_preview = if email_body.len() > 500 {
+                    format!("{}...", &email_body[..497])
+                } else {
+                    email_body
+                };
+
+                let event = WatcherEvent::email(
+                    watcher.id.clone(),
+                    email_from,
+                    email_subject,
+                    body_preview,
+                );
+
+                if let Err(e) = event_tx.send(event) {
+                    error!("Failed to send email event: {}", e);
+                }
+            }
         }
         WatcherKind::CalendarWatch {
             lookahead_hours, ..
@@ -538,12 +653,77 @@ async fn poll_watcher(
                 watcher.id, lookahead_hours
             );
 
-            // TODO: Implement actual calendar polling
-            // For now, just log that we would check
-            // In a real implementation, this would:
-            // 1. Connect to calendar API (Google Calendar, etc.)
-            // 2. Fetch events within lookahead window
-            // 3. Emit events for upcoming meetings
+            let days_ahead = (*lookahead_hours as f64 / 24.0).ceil().max(1.0) as u64;
+            let script = format!(
+                r#"
+tell application "Calendar"
+    try
+        set startDate to current date
+        set endDate to (current date) + ({} * days)
+        set theEvents to (every event of calendar "Calendar" whose start date is greater than or equal to startDate and start date is less than or equal to endDate)
+        set output to ""
+        repeat with evt in theEvents
+            set output to output & "Event: " & (summary of evt) & "\n"
+            set output to output & "Start: " & (start date of evt as string) & "\n"
+            set output to output & "End: " & (end date of evt as string) & "\n"
+            set output to output & "---\n"
+        end repeat
+        return output
+    on error errMsg
+        return "Error: " & errMsg
+    end try
+end tell
+"#,
+                days_ahead
+            );
+
+            let output = Command::new("osascript")
+                .arg("-e")
+                .arg(&script)
+                .output()
+                .await?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                warn!("Calendar polling failed: {}", stderr);
+                return Ok(());
+            }
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.starts_with("Error:") {
+                warn!("Calendar polling returned error: {}", stdout);
+                return Ok(());
+            }
+
+            for entry in stdout.split("---\n").filter(|e| !e.trim().is_empty()) {
+                let mut event_title = String::new();
+                let mut event_start = String::new();
+
+                for line in entry.lines() {
+                    if let Some(val) = line.strip_prefix("Event: ") {
+                        event_title = val.trim().to_string();
+                    } else if let Some(val) = line.strip_prefix("Start: ") {
+                        event_start = val.trim().to_string();
+                    }
+                }
+
+                // Dedup
+                let hash_key = format!("{}|{}", event_title, event_start);
+                let hash = PollState::hash_item(&hash_key);
+                if !state.seen_hashes.insert(hash) {
+                    continue;
+                }
+
+                let event = WatcherEvent::calendar(
+                    watcher.id.clone(),
+                    event_title,
+                    Utc::now(), // Use current time as proxy since AppleScript date parsing is unreliable
+                );
+
+                if let Err(e) = event_tx.send(event) {
+                    error!("Failed to send calendar event: {}", e);
+                }
+            }
         }
         WatcherKind::GitHubWatch { repo, events, .. } => {
             debug!(
@@ -551,15 +731,75 @@ async fn poll_watcher(
                 watcher.id, repo, events
             );
 
-            // TODO: Implement actual GitHub polling
-            // For now, just log that we would check
-            // In a real implementation, this would:
-            // 1. Call GitHub API for repository events
-            // 2. Filter by requested event types
-            // 3. Emit events for new activity
+            let url = format!("https://api.github.com/repos/{}/events", repo);
+            let client = reqwest::Client::builder()
+                .user_agent("meepo-agent/1.0")
+                .build()?;
+
+            let response = client.get(&url).send().await?;
+
+            if !response.status().is_success() {
+                warn!(
+                    "GitHub API returned status {} for {}",
+                    response.status(),
+                    repo
+                );
+                return Ok(());
+            }
+
+            let body: serde_json::Value = response.json().await?;
+            let events_array = body.as_array().unwrap_or(&Vec::new()).clone();
+
+            for gh_event in &events_array {
+                let event_id = gh_event
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let event_type = gh_event
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                // Skip if we've already seen this event
+                if let Some(last_id) = &state.last_github_event_id {
+                    if event_id <= *last_id {
+                        continue;
+                    }
+                }
+
+                // Filter by requested event types (if specified)
+                if !events.is_empty() {
+                    let type_lower = event_type.to_lowercase();
+                    let matches = events.iter().any(|e| {
+                        type_lower.contains(&e.to_lowercase())
+                    });
+                    if !matches {
+                        continue;
+                    }
+                }
+
+                let watcher_event = WatcherEvent::github(
+                    watcher.id.clone(),
+                    event_type,
+                    gh_event.clone(),
+                );
+
+                if let Err(e) = event_tx.send(watcher_event) {
+                    error!("Failed to send GitHub event: {}", e);
+                }
+            }
+
+            // Update last seen event ID (first event in the array is the newest)
+            if let Some(first) = events_array.first() {
+                if let Some(id) = first.get("id").and_then(|v| v.as_str()) {
+                    state.last_github_event_id = Some(id.to_string());
+                }
+            }
         }
         _ => {
-            // Non-polling watcher types should not reach here
             warn!(
                 "poll_watcher called on non-polling watcher: {}",
                 watcher.id

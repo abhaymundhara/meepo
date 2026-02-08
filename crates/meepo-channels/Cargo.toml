@@ -16,5 +16,6 @@ uuid = { workspace = true }
 async-trait = { workspace = true }
 serenity = { workspace = true }
 rusqlite = { workspace = true }
+reqwest = { workspace = true }
 dashmap = "6.1"
 dirs = "5.0"

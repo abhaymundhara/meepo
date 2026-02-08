@@ -72,6 +72,8 @@ pub struct SlackConfig {
     pub app_token: String,
     #[serde(default)]
     pub bot_token: String,
+    #[serde(default = "default_slack_poll_interval")]
+    pub poll_interval_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +89,10 @@ pub struct IMessageConfig {
 }
 
 fn default_poll_interval() -> u64 {
+    3
+}
+
+fn default_slack_poll_interval() -> u64 {
     3
 }
 
