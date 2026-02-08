@@ -14,5 +14,5 @@ else
     echo "No launchd plist found at $PLIST_PATH"
 fi
 
-echo "Meepo meepo uninstalled."
+echo "Meepo launch agent uninstalled."
 echo "Config and data remain at ~/.meepo/ — delete manually if desired."

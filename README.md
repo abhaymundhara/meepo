@@ -22,6 +22,16 @@ Meepo runs as a daemon on your Mac, monitoring your configured channels for mess
 
 ## Quick Start
 
+The easiest way to get started is the interactive setup script:
+
+```bash
+./scripts/setup.sh
+```
+
+This walks you through building, configuring API keys, and enabling channels step by step.
+
+Or do it manually:
+
 ```bash
 # Build
 cargo build --release
@@ -29,10 +39,10 @@ cargo build --release
 # Initialize config
 ./target/release/meepo init
 
-# Set your API key
+# Set your API key (get one at https://console.anthropic.com/settings/keys)
 export ANTHROPIC_API_KEY="sk-ant-..."
 
-# Edit config
+# Edit config to enable channels
 nano ~/.meepo/config.toml
 
 # Start the agent
@@ -210,6 +220,17 @@ Meepo registers 20 tools that Claude can use during conversations:
 
 See [docs/architecture.md](docs/architecture.md) for detailed architecture documentation with diagrams.
 
+## Running as a Background Service
+
+To run Meepo as a macOS launch agent (starts on login, auto-restarts):
+
+```bash
+scripts/install.sh     # Install and start
+scripts/uninstall.sh   # Remove
+```
+
+Logs are at `~/.meepo/logs/meepo.out.log`.
+
 ## Project Structure
 
 ```
@@ -221,7 +242,11 @@ meepo/
 │   ├── meepo-scheduler/  # Watcher runner, persistence, polling
 │   └── meepo-cli/        # CLI binary, config loading
 ├── config/
-│   └── default.toml      # Default configuration template
+│   └── default.toml      # Default configuration template (heavily commented)
+├── scripts/
+│   ├── setup.sh          # Interactive first-time setup
+│   ├── install.sh        # Install as macOS launch agent
+│   └── uninstall.sh      # Remove launch agent
 ├── SOUL.md               # Agent personality template
 └── MEMORY.md             # Agent memory template
 ```
