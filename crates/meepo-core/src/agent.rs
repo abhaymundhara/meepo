@@ -219,7 +219,7 @@ mod tests {
         };
 
         let context = agent.load_context(&msg).await.unwrap();
-        // Context should be present even if empty
-        assert!(!context.is_empty() || context.is_empty()); // Always true, just testing it runs
+        // Context is a String — load_context should succeed without panic
+        assert!(context.len() <= 100_000, "Context unexpectedly large");
     }
 }
