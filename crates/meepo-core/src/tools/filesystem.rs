@@ -180,6 +180,178 @@ fn list_dir_recursive(
     Ok(())
 }
 
+/// Search file contents within a directory
+pub struct SearchFilesTool {
+    allowed_dirs: Vec<PathBuf>,
+}
+
+impl SearchFilesTool {
+    pub fn new(allowed_dirs: Vec<String>) -> Self {
+        Self {
+            allowed_dirs: allowed_dirs.iter().map(|d| shellexpand(d)).collect(),
+        }
+    }
+}
+
+#[async_trait]
+impl ToolHandler for SearchFilesTool {
+    fn name(&self) -> &str {
+        "search_files"
+    }
+
+    fn description(&self) -> &str {
+        "Search for text patterns within files in a directory. Returns matching lines with file paths, line numbers, and context."
+    }
+
+    fn input_schema(&self) -> Value {
+        json_schema(
+            serde_json::json!({
+                "path": {
+                    "type": "string",
+                    "description": "Directory to search in (supports ~/)"
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Text or pattern to search for (case-insensitive)"
+                },
+                "file_pattern": {
+                    "type": "string",
+                    "description": "Optional glob pattern to filter files (e.g. '*.rs', '*.py')"
+                },
+                "max_results": {
+                    "type": "number",
+                    "description": "Maximum number of matching lines to return (default: 20)"
+                }
+            }),
+            vec!["path", "query"],
+        )
+    }
+
+    async fn execute(&self, input: Value) -> Result<String> {
+        let path_str = input.get("path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'path' parameter"))?;
+        let query = input.get("query")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'query' parameter"))?;
+        let file_pattern = input.get("file_pattern")
+            .and_then(|v| v.as_str());
+        let max_results = input.get("max_results")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(20)
+            .min(100) as usize;
+
+        let validated_path = validate_allowed_path(path_str, &self.allowed_dirs)?;
+        debug!("Searching files in {} for '{}'", validated_path.display(), query);
+
+        let query_lower = query.to_lowercase();
+        let mut results = Vec::new();
+        let mut files_scanned = 0usize;
+        let max_files = 1000;
+
+        search_dir_recursive(
+            &validated_path,
+            &validated_path,
+            &query_lower,
+            file_pattern,
+            max_results,
+            max_files,
+            &mut files_scanned,
+            &mut results,
+        )?;
+
+        if results.is_empty() {
+            return Ok(format!("No matches found for '{}' in {} ({} files scanned)",
+                query, validated_path.display(), files_scanned));
+        }
+
+        let header = format!("Found {} matches in {} ({} files scanned):\n",
+            results.len(), validated_path.display(), files_scanned);
+        Ok(format!("{}{}", header, results.join("\n")))
+    }
+}
+
+fn search_dir_recursive(
+    base: &Path,
+    dir: &Path,
+    query: &str,
+    file_pattern: Option<&str>,
+    max_results: usize,
+    max_files: usize,
+    files_scanned: &mut usize,
+    results: &mut Vec<String>,
+) -> Result<()> {
+    if results.len() >= max_results || *files_scanned >= max_files {
+        return Ok(());
+    }
+
+    let mut entries: Vec<_> = std::fs::read_dir(dir)?
+        .filter_map(|e| e.ok())
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+
+    for entry in entries {
+        if results.len() >= max_results || *files_scanned >= max_files {
+            break;
+        }
+
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        // Skip hidden files/dirs
+        if name.starts_with('.') {
+            continue;
+        }
+
+        if path.is_dir() {
+            // Skip common large directories
+            if matches!(name.as_str(), "node_modules" | "target" | ".git" | "build" | "dist" | "__pycache__" | ".venv" | "venv") {
+                continue;
+            }
+            search_dir_recursive(base, &path, query, file_pattern, max_results, max_files, files_scanned, results)?;
+        } else {
+            // Check file pattern
+            if let Some(pat) = file_pattern {
+                if !glob::Pattern::new(pat)
+                    .map(|p| p.matches(&name))
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+            }
+
+            // Skip binary files (check first 512 bytes)
+            if let Ok(content) = std::fs::read(&path) {
+                *files_scanned += 1;
+                let check_len = content.len().min(512);
+                if content[..check_len].contains(&0) {
+                    continue; // Skip binary
+                }
+
+                if let Ok(text) = String::from_utf8(content) {
+                    let rel_path = path.strip_prefix(base)
+                        .unwrap_or(&path)
+                        .display()
+                        .to_string();
+
+                    for (line_num, line) in text.lines().enumerate() {
+                        if results.len() >= max_results {
+                            break;
+                        }
+                        if line.to_lowercase().contains(query) {
+                            results.push(format!("{}:{}: {}",
+                                rel_path,
+                                line_num + 1,
+                                line.chars().take(200).collect::<String>()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,6 +417,75 @@ mod tests {
         let tool = ListDirectoryTool::new(vec!["~/Coding".to_string()]);
         let result = tool.execute(serde_json::json!({
             "path": "~/Coding/../../etc"
+        })).await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_search_files_tool_schema() {
+        let tool = SearchFilesTool::new(vec!["~/Coding".to_string()]);
+        assert_eq!(tool.name(), "search_files");
+    }
+
+    #[tokio::test]
+    async fn test_search_files_found() {
+        let temp = TempDir::new().unwrap();
+        let temp_path = temp.path().to_str().unwrap().to_string();
+
+        std::fs::write(temp.path().join("hello.rs"), "fn main() {\n    println!(\"hello world\");\n}\n").unwrap();
+        std::fs::write(temp.path().join("other.txt"), "nothing here").unwrap();
+
+        let tool = SearchFilesTool::new(vec![temp_path.clone()]);
+        let result = tool.execute(serde_json::json!({
+            "path": temp_path,
+            "query": "println"
+        })).await.unwrap();
+
+        assert!(result.contains("hello.rs:2"));
+        assert!(result.contains("println"));
+    }
+
+    #[tokio::test]
+    async fn test_search_files_pattern_filter() {
+        let temp = TempDir::new().unwrap();
+        let temp_path = temp.path().to_str().unwrap().to_string();
+
+        std::fs::write(temp.path().join("hello.rs"), "fn main() {}").unwrap();
+        std::fs::write(temp.path().join("hello.py"), "def main(): pass").unwrap();
+
+        let tool = SearchFilesTool::new(vec![temp_path.clone()]);
+        let result = tool.execute(serde_json::json!({
+            "path": temp_path,
+            "query": "main",
+            "file_pattern": "*.rs"
+        })).await.unwrap();
+
+        assert!(result.contains("hello.rs"));
+        assert!(!result.contains("hello.py"));
+    }
+
+    #[tokio::test]
+    async fn test_search_files_no_match() {
+        let temp = TempDir::new().unwrap();
+        let temp_path = temp.path().to_str().unwrap().to_string();
+
+        std::fs::write(temp.path().join("hello.rs"), "fn main() {}").unwrap();
+
+        let tool = SearchFilesTool::new(vec![temp_path.clone()]);
+        let result = tool.execute(serde_json::json!({
+            "path": temp_path,
+            "query": "nonexistent_xyz_pattern"
+        })).await.unwrap();
+
+        assert!(result.contains("No matches found"));
+    }
+
+    #[tokio::test]
+    async fn test_search_files_denied() {
+        let tool = SearchFilesTool::new(vec!["~/Coding".to_string()]);
+        let result = tool.execute(serde_json::json!({
+            "path": "/etc",
+            "query": "test"
         })).await;
         assert!(result.is_err());
     }
