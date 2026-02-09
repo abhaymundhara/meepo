@@ -62,28 +62,7 @@ cargo build --release && ./target/release/meepo setup
 
 All methods run `meepo setup` — an interactive wizard that configures your API keys and tests the connection.
 
-## Setup Guide
-
-After installing, the `meepo setup` wizard walks you through everything. Or configure manually:
-
-```bash
-# Initialize config
-meepo init
-
-# Set your API key (get one at https://console.anthropic.com/settings/keys)
-export ANTHROPIC_API_KEY="sk-ant-..."
-
-# Edit config to enable channels
-nano ~/.meepo/config.toml
-
-# Start the agent
-meepo start
-
-# Or ask a one-shot question (no daemon needed)
-meepo ask "What's on my calendar today?"
-```
-
-## Setup Guide
+## Manual Setup
 
 ### 1. Build
 

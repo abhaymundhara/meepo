@@ -36,8 +36,17 @@ $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRand
 New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
 
 try {
-    Invoke-WebRequest -Uri $url -OutFile (Join-Path $tmpDir $archive)
+    Invoke-WebRequest -Uri $url -OutFile (Join-Path $tmpDir $archive) -ErrorAction Stop
+} catch {
+    Write-Host ""
+    Write-Host "  Error: Failed to download from $url" -ForegroundColor Red
+    Write-Host "  Check your internet connection and try again."
+    Write-Host "  Releases: https://github.com/$Repo/releases"
+    Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+    exit 1
+}
 
+try {
     Write-Host "  Extracting..."
     Expand-Archive -Path (Join-Path $tmpDir $archive) -DestinationPath $tmpDir -Force
     Move-Item (Join-Path $tmpDir "meepo.exe") (Join-Path $InstallDir "meepo.exe") -Force

@@ -111,7 +111,10 @@ async fn cmd_init() -> Result<()> {
     }
 
     println!("Meepo initialized at {}", config_dir.display());
-    println!("Edit {} to configure your API keys and channels.", config_path.display());
+    println!();
+    println!("Next steps:");
+    println!("  meepo setup              # recommended — interactive wizard");
+    println!("  nano {}  # or configure manually", config_path.display());
     Ok(())
 }
 
@@ -149,6 +152,10 @@ async fn cmd_setup() -> Result<()> {
             writeln!(file, "\nexport ANTHROPIC_API_KEY=\"{}\"", api_key)?;
             println!("  Saved to {}", rc_path.display());
         }
+    } else {
+        println!("  Could not detect shell (SHELL={:?}).", std::env::var("SHELL").unwrap_or_default());
+        println!("  Add this to your shell profile manually:");
+        println!("    export ANTHROPIC_API_KEY=\"{}\"", api_key);
     }
 
     // Step 4: Optional Tavily key
@@ -182,15 +189,18 @@ async fn cmd_setup() -> Result<()> {
         api_key,
         Some(cfg.agent.default_model.clone()),
     );
-    let api_ok = match api.chat(
-        &[meepo_core::api::ApiMessage {
-            role: "user".to_string(),
-            content: meepo_core::api::MessageContent::Text("Say 'hello' in one word.".to_string()),
-        }],
-        &[],
-        "You are a helpful assistant.",
+    let api_ok = match tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        api.chat(
+            &[meepo_core::api::ApiMessage {
+                role: "user".to_string(),
+                content: meepo_core::api::MessageContent::Text("Say 'hello' in one word.".to_string()),
+            }],
+            &[],
+            "You are a helpful assistant.",
+        ),
     ).await {
-        Ok(response) => {
+        Ok(Ok(response)) => {
             let text: String = response.content.iter()
                 .filter_map(|b| if let meepo_core::api::ContentBlock::Text { text } = b { Some(text.as_str()) } else { None })
                 .collect();
@@ -198,9 +208,18 @@ async fn cmd_setup() -> Result<()> {
             println!("  API connection works!\n");
             true
         }
-        Err(e) => {
-            eprintln!("  API test failed: {}", e);
-            eprintln!("  Check your API key and try again.\n");
+        Ok(Err(e)) => {
+            let err_str = e.to_string();
+            eprintln!("  API test failed: {}", err_str);
+            if err_str.contains("401") || err_str.contains("auth") || err_str.contains("invalid") {
+                eprintln!("  Your API key may be incorrect or expired.");
+            }
+            eprintln!("  Check your key and try again.\n");
+            false
+        }
+        Err(_) => {
+            eprintln!("  API test timed out (>15s).");
+            eprintln!("  Check your internet connection.\n");
             false
         }
     };
@@ -297,6 +316,16 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
 
     // Initialize API client
     let api_key = shellexpand_str(&cfg.providers.anthropic.api_key);
+    if api_key.is_empty() || api_key.contains("${") {
+        anyhow::bail!(
+            "ANTHROPIC_API_KEY is not set.\n\n\
+             Fix it with:\n  \
+             export ANTHROPIC_API_KEY=\"sk-ant-...\"\n\n\
+             Or run the setup wizard:\n  \
+             meepo setup\n\n\
+             Get a key at: https://console.anthropic.com/settings/keys"
+        );
+    }
     let base_url = shellexpand_str(&cfg.providers.anthropic.base_url);
     let api = meepo_core::api::ApiClient::new(
         api_key,
@@ -708,6 +737,16 @@ async fn cmd_ask(config_path: &Option<PathBuf>, message: &str) -> Result<()> {
     let cfg = MeepoConfig::load(config_path)?;
 
     let api_key = shellexpand_str(&cfg.providers.anthropic.api_key);
+    if api_key.is_empty() || api_key.contains("${") {
+        anyhow::bail!(
+            "ANTHROPIC_API_KEY is not set.\n\n\
+             Fix it with:\n  \
+             export ANTHROPIC_API_KEY=\"sk-ant-...\"\n\n\
+             Or run the setup wizard:\n  \
+             meepo setup\n\n\
+             Get a key at: https://console.anthropic.com/settings/keys"
+        );
+    }
     let base_url = shellexpand_str(&cfg.providers.anthropic.base_url);
     let api = meepo_core::api::ApiClient::new(
         api_key,

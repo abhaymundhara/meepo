@@ -94,7 +94,13 @@ main() {
     tmpdir=$(mktemp -d)
     trap "rm -rf $tmpdir" EXIT
 
-    curl -sSL "$url" -o "$tmpdir/$archive"
+    if ! curl -fsSL "$url" -o "$tmpdir/$archive"; then
+        echo ""
+        echo "  Error: Failed to download from $url"
+        echo "  Check your internet connection and try again."
+        echo "  Releases: https://github.com/${REPO}/releases"
+        exit 1
+    fi
 
     echo "  Extracting..."
     if [[ "$archive" == *.tar.gz ]]; then

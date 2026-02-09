@@ -20,13 +20,14 @@ class Meepo < Formula
 
   def caveats
     <<~EOS
-      To get started, run the interactive setup:
+      Run the setup wizard to configure API keys:
         meepo setup
 
-      Or initialize manually:
-        meepo init
-        export ANTHROPIC_API_KEY="sk-ant-..."
+      Then start the agent:
         meepo start
+
+      Enable channels (Discord, Slack, iMessage) in:
+        ~/.meepo/config.toml
     EOS
   end
 
