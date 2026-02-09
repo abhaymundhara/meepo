@@ -7,6 +7,7 @@ pub mod bus;
 pub mod discord;
 pub mod email;
 pub mod imessage;
+pub mod rate_limit;
 pub mod slack;
 
 // Re-export main types
@@ -14,4 +15,5 @@ pub use bus::{MessageBus, MessageChannel};
 pub use discord::DiscordChannel;
 pub use email::EmailChannel;
 pub use imessage::IMessageChannel;
+pub use rate_limit::RateLimiter;
 pub use slack::SlackChannel;

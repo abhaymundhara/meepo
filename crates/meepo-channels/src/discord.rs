@@ -1,6 +1,7 @@
 //! Discord channel adapter using Serenity
 
 use crate::bus::MessageChannel;
+use crate::rate_limit::RateLimiter;
 use meepo_core::types::{IncomingMessage, OutgoingMessage, ChannelType};
 use serenity::{
     async_trait,
@@ -51,6 +52,13 @@ impl TypeMapKey for AllowedUsers {
     type Value = Vec<UserId>;
 }
 
+/// Type key for storing the rate limiter
+struct RateLimiterKey;
+
+impl TypeMapKey for RateLimiterKey {
+    type Value = RateLimiter;
+}
+
 /// Event handler for Discord messages
 struct DiscordHandler;
 
@@ -96,8 +104,9 @@ impl EventHandler for DiscordHandler {
             lru.put(msg_id.clone(), msg.channel_id);
         }
 
-        // Get the message sender
+        // Get the message sender and rate limiter
         let tx = data.get::<MessageSender>().expect("MessageSender not initialized").clone();
+        let rate_limiter = data.get::<RateLimiterKey>().cloned();
         drop(data); // Release the lock
 
         // Check message size limit
@@ -109,6 +118,13 @@ impl EventHandler for DiscordHandler {
                 MAX_MESSAGE_SIZE,
             );
             return;
+        }
+
+        // Check rate limit
+        if let Some(ref limiter) = rate_limiter {
+            if !limiter.check_and_record(&msg.author.id.to_string()) {
+                return;
+            }
         }
 
         // Convert to IncomingMessage
@@ -250,6 +266,7 @@ impl MessageChannel for DiscordChannel {
                     data.insert::<UserChannelMap>(user_channel_map.clone());
                     data.insert::<MessageChannelMap>(message_channels.clone());
                     data.insert::<AllowedUsers>(user_ids.clone());
+                    data.insert::<RateLimiterKey>(RateLimiter::new(10, Duration::from_secs(60)));
                 }
 
                 // Store HTTP client for sending messages

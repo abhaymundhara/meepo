@@ -1,6 +1,7 @@
 //! Slack channel adapter using Web API polling
 
 use crate::bus::MessageChannel;
+use crate::rate_limit::RateLimiter;
 use meepo_core::types::{ChannelType, IncomingMessage, OutgoingMessage};
 use tokio::sync::mpsc;
 use async_trait::async_trait;
@@ -154,6 +155,7 @@ impl MessageChannel for SlackChannel {
         let poll_interval = self.poll_interval;
         let channel_map = self.channel_map.clone();
         let bot_uid = bot_user_id;
+        let rate_limiter = RateLimiter::new(10, Duration::from_secs(60));
 
         // Spawn polling task (safe: all initialization is complete)
         tokio::spawn(async move {
@@ -267,6 +269,14 @@ impl MessageChannel for SlackChannel {
                                 text.len(),
                                 MAX_MESSAGE_SIZE,
                             );
+                            if ts > max_ts.as_str() {
+                                max_ts = ts.to_string();
+                            }
+                            continue;
+                        }
+
+                        // Check rate limit
+                        if !rate_limiter.check_and_record(user) {
                             if ts > max_ts.as_str() {
                                 max_ts = ts.to_string();
                             }

@@ -1,6 +1,7 @@
 //! iMessage channel adapter using SQLite polling and AppleScript
 
 use crate::bus::MessageChannel;
+use crate::rate_limit::RateLimiter;
 use meepo_core::types::{IncomingMessage, OutgoingMessage, ChannelType};
 use tokio::sync::mpsc;
 use async_trait::async_trait;
@@ -28,6 +29,7 @@ pub struct IMessageChannel {
     last_rowid: Arc<RwLock<Option<i64>>>,
     /// Maps message_id -> sender contact for reply-to tracking (LRU-bounded)
     message_senders: Arc<Mutex<LruCache<String, String>>>,
+    rate_limiter: RateLimiter,
 }
 
 impl IMessageChannel {
@@ -59,6 +61,7 @@ impl IMessageChannel {
             message_senders: Arc::new(Mutex::new(LruCache::new(
                 NonZeroUsize::new(MAX_MESSAGE_SENDERS).unwrap(),
             ))),
+            rate_limiter: RateLimiter::new(10, Duration::from_secs(60)),
         }
     }
 
@@ -161,6 +164,11 @@ impl IMessageChannel {
                         content.len(),
                         MAX_MESSAGE_SIZE,
                     );
+                    continue;
+                }
+
+                // Check rate limit
+                if !self.rate_limiter.check_and_record(&handle) {
                     continue;
                 }
 
@@ -277,6 +285,7 @@ impl MessageChannel for IMessageChannel {
         let trigger_prefix = self.trigger_prefix.clone();
         let allowed_contacts = self.allowed_contacts.clone();
         let message_senders = self.message_senders.clone();
+        let rate_limiter = self.rate_limiter.clone();
 
         // Create a new channel instance for the task
         let channel = IMessageChannel {
@@ -286,6 +295,7 @@ impl MessageChannel for IMessageChannel {
             db_path,
             last_rowid,
             message_senders,
+            rate_limiter,
         };
 
         // Spawn polling task

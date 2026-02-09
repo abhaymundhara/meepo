@@ -1,6 +1,7 @@
 //! Email channel adapter using Mail.app AppleScript polling
 
 use crate::bus::MessageChannel;
+use crate::rate_limit::RateLimiter;
 use meepo_core::types::{IncomingMessage, OutgoingMessage, ChannelType};
 use tokio::sync::mpsc;
 use async_trait::async_trait;
@@ -22,6 +23,7 @@ pub struct EmailChannel {
     subject_prefix: String,
     /// Maps message_id -> (sender, original_subject) for reply routing
     message_senders: Arc<Mutex<LruCache<String, EmailMeta>>>,
+    rate_limiter: RateLimiter,
 }
 
 /// Metadata about an email for reply threading
@@ -38,6 +40,7 @@ impl EmailChannel {
             message_senders: Arc::new(Mutex::new(LruCache::new(
                 NonZeroUsize::new(MAX_EMAIL_SENDERS).unwrap(),
             ))),
+            rate_limiter: RateLimiter::new(10, Duration::from_secs(60)),
         }
     }
 
@@ -135,6 +138,11 @@ end tell
 
             if id.is_empty() || sender.is_empty() {
                 debug!("Skipping email with missing id='{}' or sender='{}'", id, sender);
+                continue;
+            }
+
+            // Check rate limit
+            if !self.rate_limiter.check_and_record(&sender) {
                 continue;
             }
 
@@ -242,11 +250,13 @@ impl MessageChannel for EmailChannel {
         let poll_interval = self.poll_interval;
         let subject_prefix = self.subject_prefix.clone();
         let message_senders = self.message_senders.clone();
+        let rate_limiter = self.rate_limiter.clone();
 
         let channel = EmailChannel {
             poll_interval,
             subject_prefix,
             message_senders,
+            rate_limiter,
         };
 
         tokio::spawn(async move {
