@@ -37,6 +37,8 @@ fn default_memory_file() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProvidersConfig {
     pub anthropic: AnthropicConfig,
+    #[serde(default)]
+    pub tavily: Option<TavilyConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +50,12 @@ pub struct AnthropicConfig {
 
 fn default_base_url() -> String {
     "https://api.anthropic.com".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TavilyConfig {
+    #[serde(default)]
+    pub api_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -36,6 +36,19 @@ memory_file = "MEMORY.md"               # Persistent memory file (in workspace d
 api_key = "${ANTHROPIC_API_KEY}"
 base_url = "https://api.anthropic.com"
 
+# ── Tavily Search API (Optional) ────────────────────────────────
+# Enables web search and clean URL content extraction.
+#
+# Get your key at: https://tavily.com
+#   1. Sign up at tavily.com
+#   2. Copy your API key from the dashboard
+#
+# Set it as an environment variable:
+#   export TAVILY_API_KEY="tvly-..."
+
+[providers.tavily]
+api_key = "${TAVILY_API_KEY}"
+
 
 # ── Discord Channel ───────────────────────────────────────────────
 # Talk to Meepo via Discord DMs. Requires a Discord bot.
