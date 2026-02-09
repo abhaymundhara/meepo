@@ -3,8 +3,6 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::signal;
-use tokio::sync::Semaphore;
-use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn, error};
 use tracing_subscriber::EnvFilter;
@@ -546,22 +544,20 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
     let (mut incoming_rx, bus_sender) = bus.split();
     let bus_sender = Arc::new(bus_sender);
 
-    // Semaphore to limit concurrent message processing
-    let semaphore = Arc::new(Semaphore::new(10));
+    // ── Autonomous Loop ─────────────────────────────────────────
+    let bus_sender_for_progress = bus_sender.clone();
 
-    // Main event loop
-    let agent_clone = agent.clone();
+    let (loop_msg_tx, loop_msg_rx) = tokio::sync::mpsc::channel::<meepo_core::types::IncomingMessage>(256);
+    let (loop_resp_tx, mut loop_resp_rx) = tokio::sync::mpsc::channel::<meepo_core::types::OutgoingMessage>(256);
+    let wake = meepo_core::autonomy::AutonomousLoop::create_wake_handle();
+
+    // Forward incoming bus messages to the autonomous loop
+    let wake_clone = wake.clone();
     let cancel_clone = cancel.clone();
-    let watcher_runner_clone = watcher_runner.clone();
-    let main_loop = tokio::spawn(async move {
-        let mut join_set = JoinSet::new();
-
+    let bus_to_loop = tokio::spawn(async move {
         loop {
             tokio::select! {
-                _ = cancel_clone.cancelled() => {
-                    info!("Agent loop shutting down");
-                    break;
-                }
+                _ = cancel_clone.cancelled() => break,
                 msg = incoming_rx.recv() => {
                     match msg {
                         Some(incoming) => {
@@ -569,28 +565,71 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
                                 incoming.sender,
                                 incoming.channel,
                                 &incoming.content[..incoming.content.len().min(100)]);
-                            let agent = agent_clone.clone();
-                            let sender = bus_sender.clone();
-                            let permit = semaphore.clone().acquire_owned().await.expect("semaphore closed");
-                            join_set.spawn(async move {
-                                let _permit = permit;
-                                match agent.handle_message(incoming).await {
-                                    Ok(response) => {
-                                        info!("Response generated ({} chars), routing to {}", response.content.len(), response.channel);
-                                        if let Err(e) = sender.send(response).await {
-                                            error!("Failed to route response: {}", e);
-                                        }
-                                    }
-                                    Err(e) => error!("Agent error: {}", e),
-                                }
-                            });
+                            if loop_msg_tx.send(incoming).await.is_err() {
+                                break;
+                            }
+                            wake_clone.notify_one();
                         }
-                        None => {
-                            info!("Message bus closed");
-                            break;
-                        }
+                        None => break,
                     }
                 }
+            }
+        }
+    });
+
+    // Forward watcher events to the autonomous loop
+    let (loop_watcher_tx, loop_watcher_rx) = tokio::sync::mpsc::unbounded_channel();
+    let cancel_clone2 = cancel.clone();
+    let wake_clone2 = wake.clone();
+    let watcher_to_loop = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = cancel_clone2.cancelled() => break,
+                event = watcher_event_rx.recv() => {
+                    match event {
+                        Some(ev) => {
+                            info!("Watcher event: {} from {}", ev.kind, ev.watcher_id);
+                            let _ = loop_watcher_tx.send(ev);
+                            wake_clone2.notify_one();
+                        }
+                        None => break,
+                    }
+                }
+            }
+        }
+    });
+
+    // Forward loop responses to the bus sender
+    let cancel_clone3 = cancel.clone();
+    let resp_to_bus = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = cancel_clone3.cancelled() => break,
+                resp = loop_resp_rx.recv() => {
+                    match resp {
+                        Some(msg) => {
+                            let channel = msg.channel.clone();
+                            if let Err(e) = bus_sender.send(msg).await {
+                                // Internal channel has no handler — this is expected
+                                if channel != meepo_core::types::ChannelType::Internal {
+                                    error!("Failed to route response to {}: {}", channel, e);
+                                }
+                            }
+                        }
+                        None => break,
+                    }
+                }
+            }
+        }
+    });
+
+    // Handle watcher commands (independent of the loop)
+    let cancel_clone4 = cancel.clone();
+    let watcher_runner_clone = watcher_runner.clone();
+    let watcher_cmd_task = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = cancel_clone4.cancelled() => break,
                 cmd = watcher_command_rx.recv() => {
                     if let Some(command) = cmd {
                         let runner = watcher_runner_clone.clone();
@@ -614,81 +653,70 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
                                         active: true,
                                         created_at: chrono::Utc::now(),
                                     };
-
-                                    // Persist to scheduler DB for restart recovery
                                     if let Ok(conn) = sched_db.lock() {
                                         if let Err(e) = meepo_scheduler::persistence::save_watcher(&conn, &watcher) {
                                             error!("Failed to persist watcher {}: {}", watcher.id, e);
                                         }
                                     }
-
                                     if let Err(e) = runner.lock().await.start_watcher(watcher).await {
                                         error!("Failed to start watcher: {}", e);
                                     }
                                 }
                                 WatcherCommand::Cancel { id } => {
-                                    // Deactivate in scheduler DB
                                     if let Ok(conn) = sched_db.lock() {
                                         if let Err(e) = meepo_scheduler::persistence::deactivate_watcher(&conn, &id) {
                                             error!("Failed to deactivate watcher {} in scheduler DB: {}", id, e);
                                         }
                                     }
-
                                     if let Err(e) = runner.lock().await.stop_watcher(&id).await {
                                         error!("Failed to stop watcher {}: {}", id, e);
                                     }
                                 }
-                                WatcherCommand::List => {
-                                    // List command is handled synchronously by the tool via DB query
-                                }
-                            }
-                        });
-                    }
-                }
-                progress = progress_rx.recv() => {
-                    if let Some(msg) = progress {
-                        info!("Sub-agent progress for {}: {}",
-                            msg.channel,
-                            &msg.content[..msg.content.len().min(100)]);
-                        let sender = bus_sender.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = sender.send(msg).await {
-                                error!("Failed to send progress message: {}", e);
-                            }
-                        });
-                    }
-                }
-                event = watcher_event_rx.recv() => {
-                    if let Some(event) = event {
-                        info!("Watcher event: {} from {}", event.kind, event.watcher_id);
-                        let agent = agent_clone.clone();
-                        let permit = semaphore.clone().acquire_owned().await.expect("semaphore closed");
-                        join_set.spawn(async move {
-                            let _permit = permit;
-                            let msg = meepo_core::types::IncomingMessage {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                sender: "watcher".to_string(),
-                                content: format!("Watcher {} triggered: {}", event.watcher_id, event.payload),
-                                channel: meepo_core::types::ChannelType::Internal,
-                                timestamp: chrono::Utc::now(),
-                            };
-                            match agent.handle_message(msg).await {
-                                Ok(response) => {
-                                    // Log the response instead of trying to send through bus
-                                    // since Internal channel has no handler and watcher events
-                                    // are informational notifications
-                                    info!("Watcher {} response: {}", event.watcher_id, response.content);
-                                }
-                                Err(e) => error!("Failed to handle watcher event: {}", e),
+                                WatcherCommand::List => {}
                             }
                         });
                     }
                 }
             }
         }
+    });
 
-        // Drain remaining tasks for graceful shutdown
-        while join_set.join_next().await.is_some() {}
+    // Handle sub-agent progress
+    let cancel_clone5 = cancel.clone();
+    let progress_task = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = cancel_clone5.cancelled() => break,
+                progress = progress_rx.recv() => {
+                    if let Some(msg) = progress {
+                        info!("Sub-agent progress for {}: {}", msg.channel, &msg.content[..msg.content.len().min(100)]);
+                        let _ = bus_sender_for_progress.send(msg).await;
+                    }
+                }
+            }
+        }
+    });
+
+    // Start the autonomous loop
+    let autonomy_config = meepo_core::autonomy::AutonomyConfig {
+        enabled: cfg.autonomy.enabled,
+        tick_interval_secs: cfg.autonomy.tick_interval_secs,
+        max_goals: cfg.autonomy.max_goals,
+    };
+
+    let auto_loop = meepo_core::autonomy::AutonomousLoop::new(
+        agent,
+        db.clone(),
+        autonomy_config,
+        loop_msg_rx,
+        loop_watcher_rx,
+        loop_resp_tx,
+        wake,
+    );
+
+    let cancel_clone6 = cancel.clone();
+    let loop_task = tokio::spawn(async move {
+        auto_loop.run(cancel_clone6).await;
     });
 
     // Wait for shutdown signal
@@ -696,8 +724,8 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
     info!("Received Ctrl+C, shutting down...");
     cancel.cancel();
 
-    // Wait for main loop to finish
-    let _ = main_loop.await;
+    // Wait for all tasks
+    let _ = tokio::join!(loop_task, bus_to_loop, watcher_to_loop, resp_to_bus, watcher_cmd_task, progress_task);
 
     // Stop all watchers
     watcher_runner.lock().await.stop_all().await;
