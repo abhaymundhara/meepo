@@ -9,6 +9,7 @@
 
 pub mod agent;
 pub mod api;
+pub mod autonomy;
 pub mod context;
 pub mod orchestrator;
 pub mod platform;
@@ -19,6 +20,7 @@ pub mod types;
 // Re-export main types for convenience
 pub use agent::Agent;
 pub use api::{ApiClient, ApiMessage, ApiResponse, ContentBlock, MessageContent, ToolDefinition};
+pub use autonomy::{AutonomousLoop, AutonomyConfig};
 pub use context::{build_system_prompt, load_memory, load_soul};
 pub use orchestrator::{
     ExecutionMode, FilteredToolExecutor, OrchestratorConfig,
