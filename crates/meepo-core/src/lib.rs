@@ -20,7 +20,7 @@ pub use api::{ApiClient, ApiMessage, ApiResponse, ContentBlock, MessageContent, 
 pub use context::{build_system_prompt, load_memory, load_soul};
 pub use orchestrator::{
     ExecutionMode, FilteredToolExecutor, OrchestratorConfig,
-    SubTask, SubTaskResult, SubTaskStatus, TaskGroup,
+    SubTask, SubTaskResult, SubTaskStatus, TaskGroup, TaskOrchestrator,
 };
 pub use tools::{ToolExecutor, ToolHandler, ToolRegistry};
 pub use types::{ChannelType, IncomingMessage, OutgoingMessage};
@@ -37,5 +37,15 @@ mod tests {
         let _ = std::mem::size_of::<ToolRegistry>();
         let _ = std::mem::size_of::<IncomingMessage>();
         let _ = std::mem::size_of::<OutgoingMessage>();
+    }
+
+    #[test]
+    fn test_orchestrator_exports() {
+        let _ = std::mem::size_of::<TaskOrchestrator>();
+        let _ = std::mem::size_of::<FilteredToolExecutor>();
+        let _ = std::mem::size_of::<OrchestratorConfig>();
+        let _ = std::mem::size_of::<SubTask>();
+        let _ = std::mem::size_of::<SubTaskResult>();
+        let _ = std::mem::size_of::<TaskGroup>();
     }
 }
