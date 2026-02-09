@@ -2,7 +2,7 @@
 
 ## Overview
 
-Meepo is a 5-crate Rust workspace implementing a local AI agent for macOS. It connects Claude to messaging channels (Discord, Slack, iMessage), gives it access to 20 tools, and maintains a persistent knowledge graph.
+Meepo is a 5-crate Rust workspace implementing a local AI agent for macOS. It connects Claude to messaging channels (Discord, Slack, iMessage), gives it access to 25 tools (including web search and sub-agent delegation), and maintains a persistent knowledge graph.
 
 ## Crate Dependency Graph
 
@@ -20,7 +20,7 @@ graph TD
 | Crate | Purpose | Key Types |
 |-------|---------|-----------|
 | `meepo-cli` | Binary entry point, config, subcommands | `Cli`, `MeepoConfig` |
-| `meepo-core` | Agent loop, API client, tool system | `Agent`, `ApiClient`, `ToolRegistry` |
+| `meepo-core` | Agent loop, API client, tool system, orchestrator | `Agent`, `ApiClient`, `ToolRegistry`, `TaskOrchestrator`, `TavilyClient` |
 | `meepo-channels` | Channel adapters and message routing | `MessageBus`, `MessageChannel` |
 | `meepo-knowledge` | SQLite + Tantivy persistence | `KnowledgeDb`, `KnowledgeGraph`, `TantivyIndex` |
 | `meepo-scheduler` | Watcher runner and event system | `WatcherRunner`, `Watcher`, `WatcherEvent` |
@@ -73,13 +73,19 @@ graph TB
         API[ApiClient]
         ToolReg[ToolRegistry]
 
-        subgraph ToolSystem["Tools (20)"]
+        subgraph ToolSystem["Tools (25)"]
             MacOS[macOS Tools]
             A11y[Accessibility Tools]
             Code[Code Tools]
+            Web[Web Search + Browse]
             Mem[Memory Tools]
             Sys[System Tools]
+            Watch[Watcher Tools]
+            Deleg[Delegation]
         end
+
+        Orch[TaskOrchestrator]
+        Tavily[TavilyClient]
     end
 
     subgraph Channels["meepo-channels"]
@@ -126,6 +132,11 @@ graph TB
     Runner --> Persist
     Persist --> DB
 
+    Deleg --> Orch
+    Orch --> API
+    Web --> Tavily
+    Tavily -->|HTTP| TavilyAPI[Tavily API]
+
     MacOS -->|AppleScript| Mail[Mail.app]
     MacOS -->|AppleScript| Cal[Calendar.app]
     IMsg -->|SQLite| MsgDB[Messages DB]
@@ -136,19 +147,21 @@ graph TB
 
 ## Event Loop
 
-The main event loop runs in `cmd_start()` using `tokio::select!` across three sources:
+The main event loop runs in `cmd_start()` using `tokio::select!` across four sources:
 
 ```mermaid
 graph LR
     subgraph Sources
         RX[incoming_rx.recv]
         WE[watcher_event_rx.recv]
+        PR[progress_rx.recv]
         SIG[Ctrl+C Signal]
     end
 
     subgraph Select["tokio::select!"]
         RX -->|IncomingMessage| Spawn1[Spawn Task]
         WE -->|WatcherEvent| Spawn2[Spawn Task]
+        PR -->|ProgressUpdate| Log[Log Progress]
         SIG -->|CancellationToken| Shutdown[Shutdown]
     end
 
@@ -181,8 +194,11 @@ graph TD
         M["macOS (6)"]
         A["Accessibility (3)"]
         C["Code (3)"]
+        W["Web (2)"]
         K["Memory (4)"]
-        S["System (4)"]
+        S["System (3)"]
+        Wa["Watchers (3)"]
+        D["Delegation (1)"]
     end
 
     Categories --> Registry
@@ -199,7 +215,7 @@ graph TD
 | `read_emails` | Read recent emails from Mail.app | AppleScript via `osascript` |
 | `read_calendar` | Read upcoming calendar events | AppleScript via `osascript` |
 | `send_email` | Send email via Mail.app | AppleScript (sanitized input) |
-| `create_event` | Create calendar event | AppleScript (sanitized input) |
+| `create_calendar_event` | Create calendar event | AppleScript (sanitized input) |
 | `open_app` | Open macOS application | `open -a` command |
 | `get_clipboard` | Read clipboard contents | `pbpaste` command |
 | `read_screen` | Read focused app/window info | AppleScript accessibility |
@@ -208,6 +224,8 @@ graph TD
 | `write_code` | Delegate coding to Claude CLI | `claude` CLI subprocess |
 | `make_pr` | Create GitHub pull request | `git` + `gh` CLI |
 | `review_pr` | Analyze PR diff for issues | `gh pr view` + diff analysis |
+| `web_search` | Search the web via Tavily | Tavily Search API (conditional) |
+| `browse_url` | Fetch URL content | Tavily Extract → raw `reqwest` fallback |
 | `remember` | Store entity in knowledge graph | SQLite + Tantivy insert |
 | `recall` | Search entities by name/type | SQLite query |
 | `search_knowledge` | Full-text search knowledge graph | Tantivy search |
@@ -215,7 +233,10 @@ graph TD
 | `run_command` | Execute shell command (allowlisted) | `sh -c` with 30s timeout |
 | `read_file` | Read file contents | `tokio::fs::read_to_string` |
 | `write_file` | Write file contents | `tokio::fs::write` |
-| `browse_url` | Fetch URL content | `reqwest` with SSRF protection |
+| `create_watcher` | Create a background monitor | SQLite + tokio task |
+| `list_watchers` | List active watchers | SQLite query |
+| `cancel_watcher` | Cancel an active watcher | CancellationToken |
+| `delegate_tasks` | Spawn sub-agent tasks | TaskOrchestrator |
 
 ## Knowledge Graph
 
@@ -356,6 +377,70 @@ graph TB
 | Discord | WebSocket via Serenity | EventHandler callback | HTTP via `channel_id.say()` | LRU cache (1000 entries) |
 | Slack | HTTP polling (configurable interval) | `conversations.history` | `chat.postMessage` | DashMap user->channel |
 | iMessage | SQLite polling of chat.db | Read-only query by ROWID | AppleScript `send` command | LRU cache (1000 entries) |
+
+## Sub-Agent Orchestrator
+
+The `delegate_tasks` tool enables Meepo to break complex requests into focused sub-tasks. Each sub-task runs as an independent agent with a scoped subset of tools.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Agent as Main Agent
+    participant DT as delegate_tasks
+    participant Orch as TaskOrchestrator
+    participant SA1 as Sub-Agent 1
+    participant SA2 as Sub-Agent 2
+
+    User->>Agent: Complex request
+    Agent->>DT: delegate_tasks(parallel, [task1, task2])
+    DT->>Orch: execute_parallel(tasks)
+    par Concurrent execution
+        Orch->>SA1: run_tool_loop(task1, filtered_tools)
+        Orch->>SA2: run_tool_loop(task2, filtered_tools)
+    end
+    SA1-->>Orch: result1
+    SA2-->>Orch: result2
+    Orch-->>DT: combined results
+    DT-->>Agent: formatted output
+    Agent-->>User: Final response
+```
+
+**Two execution modes:**
+
+| Mode | Behavior | Use Case |
+|------|----------|----------|
+| `parallel` | Blocks until all sub-tasks complete, returns combined results | Multi-part research, data gathering |
+| `background` | Fire-and-forget, reports progress asynchronously | Long-running work the user checks on later |
+
+**Key design decisions:**
+- **`FilteredToolExecutor`** wraps `ToolRegistry` to give each sub-agent a scoped tool list — `delegate_tasks` is always stripped to prevent recursive nesting
+- **`OnceLock`** pattern resolves circular dependency: the tool needs a registry reference, but the registry contains the tool
+- **`Semaphore`** enforces `max_concurrent_subtasks` to prevent resource exhaustion
+- **Atomic CAS loop** for background group counting under contention
+
+## Web Search
+
+Web search is powered by the Tavily API with graceful degradation — everything works without a Tavily key, just without `web_search` and with raw HTML fallback for `browse_url`.
+
+```mermaid
+graph TD
+    subgraph TavilyClient
+        Search["search(query, max_results)"]
+        Extract["extract(url)"]
+    end
+
+    subgraph Tools
+        WS["web_search tool"] --> Search
+        BU["browse_url tool"] --> Extract
+        BU -->|"fallback"| Raw["Raw reqwest fetch"]
+    end
+
+    Search -->|HTTP| API["Tavily Search API"]
+    Extract -->|HTTP| API2["Tavily Extract API"]
+    Raw -->|HTTP| Target["Target URL"]
+```
+
+**Registration logic:** At startup, if `TAVILY_API_KEY` is set, a shared `TavilyClient` is created. `web_search` is registered only when the client exists. `browse_url` is always registered — it tries Tavily Extract first and falls back to raw fetch.
 
 ## Security Model
 

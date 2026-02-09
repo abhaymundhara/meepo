@@ -32,6 +32,20 @@ echo "Using binary: $BINARY_PATH"
 # Create log directory
 mkdir -p "$LOG_DIR"
 
+# Build environment variable entries for the plist.
+# launchd doesn't inherit shell env vars, so we snapshot them at install time.
+ENV_ENTRIES="        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:$HOME/.cargo/bin</string>"
+
+for VAR_NAME in ANTHROPIC_API_KEY TAVILY_API_KEY DISCORD_BOT_TOKEN SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
+    VAR_VALUE="${!VAR_NAME:-}"
+    if [ -n "$VAR_VALUE" ]; then
+        ENV_ENTRIES="$ENV_ENTRIES
+        <key>$VAR_NAME</key>
+        <string>$VAR_VALUE</string>"
+    fi
+done
+
 # Create launchd plist
 cat > "$PLIST_PATH" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -55,8 +69,7 @@ cat > "$PLIST_PATH" << EOF
     <string>$LOG_DIR/meepo.err.log</string>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:$HOME/.cargo/bin</string>
+$ENV_ENTRIES
     </dict>
 </dict>
 </plist>
@@ -64,8 +77,25 @@ EOF
 
 echo "Created launchd plist at $PLIST_PATH"
 
+# Show which env vars were captured
+echo ""
+echo "Environment variables captured in plist:"
+for VAR_NAME in ANTHROPIC_API_KEY TAVILY_API_KEY DISCORD_BOT_TOKEN SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
+    if [ -n "${!VAR_NAME:-}" ]; then
+        echo "  ✓ $VAR_NAME"
+    else
+        echo "  - $VAR_NAME (not set)"
+    fi
+done
+echo ""
+echo "Note: If you add or change API keys later, re-run this script to update the plist."
+
+# Unload first if already loaded (idempotent reinstall)
+launchctl unload "$PLIST_PATH" 2>/dev/null || true
+
 # Load the agent
 launchctl load "$PLIST_PATH"
+echo ""
 echo "Meepo started and will run on login."
 echo ""
 echo "Commands:"

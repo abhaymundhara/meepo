@@ -205,9 +205,47 @@ else
     fi
 fi
 
-# ── Step 5: Enable Channels ───────────────────────────────────────
+# ── Step 5: Tavily API Key (Optional) ────────────────────────────
 
-print_header "Step 5: Enable Channels"
+print_header "Step 5: Tavily API Key (Optional)"
+
+echo "  Tavily enables web search and clean URL content extraction."
+echo "  Without it, Meepo still works — you just won't have the web_search tool."
+echo ""
+
+CURRENT_TAVILY="${TAVILY_API_KEY:-}"
+if [ -n "$CURRENT_TAVILY" ]; then
+    MASKED_T="${CURRENT_TAVILY:0:5}...${CURRENT_TAVILY: -4}"
+    print_ok "TAVILY_API_KEY already set in environment ($MASKED_T)"
+else
+    if ask_yn "Set up Tavily web search?"; then
+        echo ""
+        echo "  Get your key at: ${BOLD}https://tavily.com${NC}"
+        echo "    1. Sign up at tavily.com"
+        echo "    2. Copy your API key from the dashboard (starts with tvly-)"
+        echo ""
+
+        read -rsp "  Paste your Tavily API key (hidden): " TAVILY_KEY
+        echo ""
+
+        if [ -n "$TAVILY_KEY" ]; then
+            SHELL_RC="${SHELL_RC:-$HOME/.zshrc}"
+            if [ -f "$SHELL_RC" ] && ! grep -q "TAVILY_API_KEY" "$SHELL_RC"; then
+                echo "" >> "$SHELL_RC"
+                echo "# Meepo - Tavily API key (web search)" >> "$SHELL_RC"
+                echo "export TAVILY_API_KEY=\"$TAVILY_KEY\"" >> "$SHELL_RC"
+                print_ok "Added TAVILY_API_KEY to $SHELL_RC"
+            fi
+            export TAVILY_API_KEY="$TAVILY_KEY"
+        fi
+    else
+        print_warn "Skipping — web_search tool won't be available"
+    fi
+fi
+
+# ── Step 6: Enable Channels ───────────────────────────────────────
+
+print_header "Step 6: Enable Channels"
 
 echo "  Meepo can listen on Discord, Slack, and/or iMessage."
 echo "  You can also skip all channels and just use 'meepo ask' from the CLI."
@@ -305,9 +343,9 @@ if ask_yn "Enable iMessage?"; then
     print_ok "iMessage enabled in config"
 fi
 
-# ── Step 6: Verify ────────────────────────────────────────────────
+# ── Step 7: Verify ────────────────────────────────────────────────
 
-print_header "Step 6: Verification"
+print_header "Step 7: Verification"
 
 # Quick test
 if [ -n "${ANTHROPIC_API_KEY:-}" ]; then

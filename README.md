@@ -2,12 +2,14 @@
 
 A local AI agent for macOS that connects Claude to your digital life through Discord, Slack, and iMessage.
 
-Meepo runs as a daemon on your Mac, monitoring your configured channels for messages. When you message it, it processes your request using Claude's API with access to 20 tools spanning email, calendar, files, code, and a persistent knowledge graph.
+Meepo runs as a daemon on your Mac, monitoring your configured channels for messages. When you message it, it processes your request using Claude's API with access to 25 tools spanning email, calendar, web search, files, code, and a persistent knowledge graph.
 
 ## Features
 
 - **Multi-channel messaging** — Discord DMs, Slack DMs, iMessage, or CLI one-shots
-- **20 built-in tools** — Read/send emails, manage calendar events, run commands, browse URLs, read/write files, manage code PRs, and more
+- **25 built-in tools** — Read/send emails, manage calendar events, search the web, run commands, browse URLs, read/write files, manage code PRs, and more
+- **Sub-agent delegation** — Breaks complex tasks into parallel sub-tasks or fires off background work you can check on later
+- **Web search** — Search the web and extract clean content from URLs via Tavily
 - **Knowledge graph** — Remembers entities, relationships, and conversations across sessions with Tantivy full-text search
 - **Scheduled watchers** — Monitor email, calendar, GitHub events, files, or run cron tasks
 - **macOS native** — Uses AppleScript for Mail.app, Calendar.app, and Messages integration
@@ -17,7 +19,8 @@ Meepo runs as a daemon on your Mac, monitoring your configured channels for mess
 
 - macOS (for AppleScript integrations)
 - Rust toolchain (`rustup`)
-- Anthropic API key
+- Anthropic API key (required)
+- Optional: Tavily API key (enables web search)
 - Optional: Discord bot token, Slack bot token
 
 ## Quick Start
@@ -25,6 +28,8 @@ Meepo runs as a daemon on your Mac, monitoring your configured channels for mess
 The easiest way to get started is the interactive setup script:
 
 ```bash
+git clone https://github.com/kavymi/meepo.git
+cd meepo
 ./scripts/setup.sh
 ```
 
@@ -75,20 +80,23 @@ This creates `~/.meepo/` with:
 - `workspace/SOUL.md` — Agent personality (editable)
 - `workspace/MEMORY.md` — Persistent memory (auto-updated)
 
-### 3. Configure API Key
+### 3. Configure API Keys
 
-Set your Anthropic API key as an environment variable:
+**Anthropic (required):**
 
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
-Or hardcode it in `~/.meepo/config.toml` (not recommended):
+Get yours at [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys).
 
-```toml
-[providers.anthropic]
-api_key = "sk-ant-..."
+**Tavily (optional — enables web search):**
+
+```bash
+export TAVILY_API_KEY="tvly-..."
 ```
+
+Get yours at [tavily.com](https://tavily.com). Without this key, Meepo still works — the `web_search` tool just won't be available, and `browse_url` will fall back to raw HTML fetching.
 
 ### 4. Enable Channels
 
@@ -168,6 +176,9 @@ max_tokens = 8192                      # Max response tokens
 api_key = "${ANTHROPIC_API_KEY}"       # Required
 base_url = "https://api.anthropic.com" # API endpoint
 
+[providers.tavily]
+api_key = "${TAVILY_API_KEY}"          # Optional — enables web_search tool
+
 [channels.discord]
 enabled = false
 token = "${DISCORD_BOT_TOKEN}"
@@ -193,6 +204,13 @@ max_concurrent = 50
 min_poll_interval_secs = 30
 active_hours = { start = "08:00", end = "23:00" }
 
+[orchestrator]
+max_concurrent_subtasks = 5            # Parallel sub-tasks per delegation
+max_subtasks_per_request = 10          # Max sub-tasks per delegate call
+parallel_timeout_secs = 120            # Timeout per parallel sub-task
+background_timeout_secs = 600          # Timeout per background sub-task
+max_background_groups = 3              # Concurrent background groups
+
 [code]
 claude_code_path = "claude"            # Path to Claude CLI
 gh_path = "gh"                         # Path to GitHub CLI
@@ -206,19 +224,22 @@ Environment variables are expanded with `${VAR_NAME}` syntax. Paths support `~/`
 
 ## Tools
 
-Meepo registers 20 tools that Claude can use during conversations:
+Meepo registers 25 tools that Claude can use during conversations:
 
 | Category | Tools |
 |----------|-------|
-| **macOS** | `read_emails`, `send_email`, `read_calendar`, `create_event`, `open_app`, `get_clipboard` |
+| **macOS** | `read_emails`, `send_email`, `read_calendar`, `create_calendar_event`, `open_app`, `get_clipboard` |
 | **Accessibility** | `read_screen`, `click_element`, `type_text` |
 | **Code** | `write_code`, `make_pr`, `review_pr` |
+| **Web** | `web_search`, `browse_url` |
 | **Memory** | `remember`, `recall`, `search_knowledge`, `link_entities` |
-| **System** | `run_command`, `read_file`, `write_file`, `browse_url` |
+| **System** | `run_command`, `read_file`, `write_file` |
+| **Watchers** | `create_watcher`, `list_watchers`, `cancel_watcher` |
+| **Delegation** | `delegate_tasks` |
 
 ## Architecture
 
-See [docs/architecture.md](docs/architecture.md) for detailed architecture documentation with diagrams.
+See [docs/architecture.md](docs/architecture.md) for detailed architecture documentation with Mermaid diagrams.
 
 ## Running as a Background Service
 
@@ -231,12 +252,38 @@ scripts/uninstall.sh   # Remove
 
 Logs are at `~/.meepo/logs/meepo.out.log`.
 
+## Troubleshooting
+
+**"API key not set" or empty responses**
+- Verify: `echo $ANTHROPIC_API_KEY` — should start with `sk-ant-`
+- If using the launch agent, re-run `scripts/install.sh` after setting new env vars (the plist snapshots env vars at install time)
+
+**iMessage not receiving messages**
+- Grant Full Disk Access to your terminal: System Settings > Privacy & Security > Full Disk Access
+- Messages must start with the trigger prefix (default `/d`)
+- Check `allowed_contacts` in config includes the sender's phone/email
+
+**`web_search` tool not available**
+- Set `TAVILY_API_KEY` env var — Meepo logs a warning at startup if it's missing
+- The tool is only registered when a valid Tavily API key is configured
+
+**Discord bot not responding**
+- Enable `MESSAGE CONTENT INTENT` in the Discord Developer Portal (Bot > Privileged Gateway Intents)
+- Verify `allowed_users` contains your Discord user ID (right-click your name > Copy User ID)
+
+**Build failures**
+- Ensure Rust is up to date: `rustup update`
+- Clean build: `cargo clean && cargo build --release`
+
+**"Permission denied" running scripts**
+- `chmod +x scripts/*.sh`
+
 ## Project Structure
 
 ```
 meepo/
 ├── crates/
-│   ├── meepo-core/       # Agent loop, API client, tool system
+│   ├── meepo-core/       # Agent loop, API client, tool system, orchestrator
 │   ├── meepo-channels/   # Discord, Slack, iMessage adapters + message bus
 │   ├── meepo-knowledge/  # SQLite + Tantivy knowledge graph
 │   ├── meepo-scheduler/  # Watcher runner, persistence, polling
@@ -247,9 +294,16 @@ meepo/
 │   ├── setup.sh          # Interactive first-time setup
 │   ├── install.sh        # Install as macOS launch agent
 │   └── uninstall.sh      # Remove launch agent
+├── docs/
+│   └── architecture.md   # Detailed architecture with Mermaid diagrams
+├── CONTRIBUTING.md        # Developer setup and contribution guide
 ├── SOUL.md               # Agent personality template
 └── MEMORY.md             # Agent memory template
 ```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, and contribution guidelines.
 
 ## License
 
