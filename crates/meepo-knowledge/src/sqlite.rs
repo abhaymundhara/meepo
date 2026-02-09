@@ -74,6 +74,32 @@ pub struct Goal {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Learned user preference
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserPreference {
+    pub id: String,
+    pub category: String,        // communication|schedule|code|workflow
+    pub key: String,
+    pub value: JsonValue,
+    pub confidence: f64,         // 0.0 to 1.0
+    pub learned_from: Option<String>,
+    pub last_confirmed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Log of autonomous actions taken
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionLogEntry {
+    pub id: String,
+    pub goal_id: Option<String>,
+    pub action_type: String,
+    pub description: String,
+    pub outcome: String,         // success|failed|pending|unknown
+    pub user_feedback: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 /// SQLite database wrapper (thread-safe via Arc<Mutex>)
 pub struct KnowledgeDb {
     conn: Arc<Mutex<Connection>>,
@@ -194,6 +220,45 @@ impl KnowledgeDb {
         )?;
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status)",
+            [],
+        )?;
+
+        // Create user_preferences table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS user_preferences (
+                id TEXT PRIMARY KEY,
+                category TEXT NOT NULL,
+                key TEXT NOT NULL UNIQUE,
+                value TEXT NOT NULL,
+                confidence REAL NOT NULL DEFAULT 0.3,
+                learned_from TEXT,
+                last_confirmed_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_preferences_category ON user_preferences(category)",
+            [],
+        )?;
+
+        // Create action_log table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS action_log (
+                id TEXT PRIMARY KEY,
+                goal_id TEXT,
+                action_type TEXT NOT NULL,
+                description TEXT NOT NULL,
+                outcome TEXT NOT NULL DEFAULT 'pending',
+                user_feedback TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (goal_id) REFERENCES goals(id)
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_action_log_goal ON action_log(goal_id)",
             [],
         )?;
 
@@ -848,6 +913,180 @@ impl KnowledgeDb {
         })
     }
 
+    /// Upsert a user preference (insert or update by key)
+    pub async fn upsert_preference(
+        &self,
+        category: &str,
+        key: &str,
+        value: JsonValue,
+        confidence: f64,
+        learned_from: Option<&str>,
+    ) -> Result<String> {
+        let conn = Arc::clone(&self.conn);
+        let category = category.to_owned();
+        let key = key.to_owned();
+        let learned_from = learned_from.map(|s| s.to_owned());
+
+        tokio::task::spawn_blocking(move || {
+            let now = Utc::now();
+            let value_str = serde_json::to_string(&value)?;
+            let conn = conn.lock().unwrap_or_else(|poisoned| {
+                warn!("Database mutex was poisoned, recovering");
+                poisoned.into_inner()
+            });
+
+            // Try update first
+            let updated = conn.execute(
+                "UPDATE user_preferences SET value = ?1, confidence = ?2, learned_from = COALESCE(?3, learned_from), updated_at = ?4 WHERE key = ?5",
+                params![&value_str, confidence, learned_from, now.to_rfc3339(), &key],
+            )?;
+
+            if updated > 0 {
+                // Return existing id
+                let id: String = conn.query_row(
+                    "SELECT id FROM user_preferences WHERE key = ?1",
+                    params![&key],
+                    |row| row.get(0),
+                )?;
+                return Ok(id);
+            }
+
+            // Insert new preference
+            let id = Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO user_preferences (id, category, key, value, confidence, learned_from, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![&id, &category, &key, &value_str, confidence, learned_from, now.to_rfc3339(), now.to_rfc3339()],
+            )?;
+            debug!("Upserted preference: {} = {:?}", key, value);
+            Ok(id)
+        })
+        .await
+        .context("spawn_blocking task panicked")?
+    }
+
+    /// Get all preferences, optionally filtered by category
+    pub async fn get_preferences(&self, category: Option<&str>) -> Result<Vec<UserPreference>> {
+        let conn = Arc::clone(&self.conn);
+        let category = category.map(|s| s.to_owned());
+
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().unwrap_or_else(|poisoned| {
+                warn!("Database mutex was poisoned, recovering");
+                poisoned.into_inner()
+            });
+
+            let (sql, params_vec): (&str, Vec<String>) = if let Some(ref cat) = category {
+                ("SELECT id, category, key, value, confidence, learned_from, last_confirmed_at, created_at, updated_at
+                  FROM user_preferences WHERE category = ?1 ORDER BY confidence DESC",
+                 vec![cat.clone()])
+            } else {
+                ("SELECT id, category, key, value, confidence, learned_from, last_confirmed_at, created_at, updated_at
+                  FROM user_preferences ORDER BY confidence DESC",
+                 vec![])
+            };
+
+            let mut stmt = conn.prepare(sql)?;
+            let prefs = if category.is_some() {
+                stmt.query_map(params![&params_vec[0]], Self::row_to_preference)?
+            } else {
+                stmt.query_map([], Self::row_to_preference)?
+            }
+            .collect::<Result<Vec<_>, _>>()?;
+            Ok(prefs)
+        })
+        .await
+        .context("spawn_blocking task panicked")?
+    }
+
+    /// Helper to convert row to UserPreference
+    fn row_to_preference(row: &rusqlite::Row) -> rusqlite::Result<UserPreference> {
+        let value_str: String = row.get(3)?;
+        let value = serde_json::from_str(&value_str)
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+                3,
+                rusqlite::types::Type::Text,
+                Box::new(e),
+            ))?;
+
+        Ok(UserPreference {
+            id: row.get(0)?,
+            category: row.get(1)?,
+            key: row.get(2)?,
+            value,
+            confidence: row.get(4)?,
+            learned_from: row.get(5)?,
+            last_confirmed_at: row.get::<_, Option<String>>(6)?.and_then(|s| s.parse().ok()),
+            created_at: row.get::<_, String>(7)?.parse().unwrap_or_else(|_| Utc::now()),
+            updated_at: row.get::<_, String>(8)?.parse().unwrap_or_else(|_| Utc::now()),
+        })
+    }
+
+    /// Insert an action log entry
+    pub async fn insert_action_log(
+        &self,
+        goal_id: Option<&str>,
+        action_type: &str,
+        description: &str,
+        outcome: &str,
+    ) -> Result<String> {
+        let conn = Arc::clone(&self.conn);
+        let goal_id = goal_id.map(|s| s.to_owned());
+        let action_type = action_type.to_owned();
+        let description = description.to_owned();
+        let outcome = outcome.to_owned();
+
+        tokio::task::spawn_blocking(move || {
+            let id = Uuid::new_v4().to_string();
+            let now = Utc::now();
+            let conn = conn.lock().unwrap_or_else(|poisoned| {
+                warn!("Database mutex was poisoned, recovering");
+                poisoned.into_inner()
+            });
+            conn.execute(
+                "INSERT INTO action_log (id, goal_id, action_type, description, outcome, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![&id, goal_id, &action_type, &description, &outcome, now.to_rfc3339()],
+            )?;
+            debug!("Inserted action log: {} - {}", action_type, description);
+            Ok(id)
+        })
+        .await
+        .context("spawn_blocking task panicked")?
+    }
+
+    /// Get recent action log entries
+    pub async fn get_recent_actions(&self, limit: usize) -> Result<Vec<ActionLogEntry>> {
+        let conn = Arc::clone(&self.conn);
+
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().unwrap_or_else(|poisoned| {
+                warn!("Database mutex was poisoned, recovering");
+                poisoned.into_inner()
+            });
+            let mut stmt = conn.prepare(
+                "SELECT id, goal_id, action_type, description, outcome, user_feedback, created_at
+                 FROM action_log ORDER BY created_at DESC LIMIT ?1",
+            )?;
+            let entries = stmt
+                .query_map(params![limit as i64], |row| {
+                    Ok(ActionLogEntry {
+                        id: row.get(0)?,
+                        goal_id: row.get(1)?,
+                        action_type: row.get(2)?,
+                        description: row.get(3)?,
+                        outcome: row.get(4)?,
+                        user_feedback: row.get(5)?,
+                        created_at: row.get::<_, String>(6)?.parse().unwrap_or_else(|_| Utc::now()),
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(entries)
+        })
+        .await
+        .context("spawn_blocking task panicked")?
+    }
+
     /// Clean up old conversations (keep only last N days)
     pub async fn cleanup_old_conversations(&self, retain_days: u32) -> Result<usize> {
         let conn = Arc::clone(&self.conn);
@@ -953,6 +1192,47 @@ mod tests {
         db.update_goal_status(&id, "completed").await?;
         let active = db.get_active_goals().await?;
         assert_eq!(active.len(), 0);
+
+        let _ = std::fs::remove_file(&temp_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_preference_operations() -> Result<()> {
+        let temp_path = env::temp_dir().join("test_prefs.db");
+        let _ = std::fs::remove_file(&temp_path);
+        let db = KnowledgeDb::new(&temp_path)?;
+
+        let id = db.upsert_preference("schedule", "morning_summary", serde_json::json!(true), 0.5, Some("user asked 3 times")).await?;
+        assert!(!id.is_empty());
+
+        let prefs = db.get_preferences(Some("schedule")).await?;
+        assert_eq!(prefs.len(), 1);
+        assert_eq!(prefs[0].key, "morning_summary");
+
+        // Upsert same key updates
+        let id2 = db.upsert_preference("schedule", "morning_summary", serde_json::json!(true), 0.8, None).await?;
+        assert_eq!(id, id2);
+        let prefs = db.get_preferences(None).await?;
+        assert_eq!(prefs.len(), 1);
+        assert!((prefs[0].confidence - 0.8).abs() < 0.01);
+
+        let _ = std::fs::remove_file(&temp_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_action_log_operations() -> Result<()> {
+        let temp_path = env::temp_dir().join("test_actions.db");
+        let _ = std::fs::remove_file(&temp_path);
+        let db = KnowledgeDb::new(&temp_path)?;
+
+        let id = db.insert_action_log(None, "sent_email", "Sent morning summary", "success").await?;
+        assert!(!id.is_empty());
+
+        let actions = db.get_recent_actions(10).await?;
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].action_type, "sent_email");
 
         let _ = std::fs::remove_file(&temp_path);
         Ok(())
