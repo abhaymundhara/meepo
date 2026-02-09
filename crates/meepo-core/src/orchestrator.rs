@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
 use tracing::{debug, warn};
 
 use crate::api::{ApiClient, ToolDefinition, Usage};
@@ -239,12 +239,15 @@ impl TaskOrchestrator {
             &format!("Working on {} tasks...", task_count),
         ).await;
 
+        let semaphore = Arc::new(Semaphore::new(self.config.max_concurrent_subtasks));
         let mut handles = Vec::new();
         for task in group.tasks {
             let api = self.api.clone();
             let reg = registry.clone();
+            let sem = semaphore.clone();
             let timeout_secs = self.config.parallel_timeout_secs;
             handles.push(tokio::spawn(async move {
+                let _permit = sem.acquire().await.expect("semaphore closed");
                 Self::run_subtask(api, reg, task, timeout_secs).await
             }));
         }
@@ -277,15 +280,22 @@ impl TaskOrchestrator {
             ));
         }
 
-        let current = self.active_background_groups.load(Ordering::SeqCst);
-        if current >= self.config.max_background_groups {
-            return Err(anyhow!(
-                "Too many background task groups running: {} (max {})",
-                current, self.config.max_background_groups,
-            ));
+        // Atomically claim a background group slot using CAS loop
+        loop {
+            let current = self.active_background_groups.load(Ordering::SeqCst);
+            if current >= self.config.max_background_groups {
+                return Err(anyhow!(
+                    "Too many background task groups running: {} (max {})",
+                    current, self.config.max_background_groups,
+                ));
+            }
+            if self.active_background_groups
+                .compare_exchange(current, current + 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                break;
+            }
         }
-
-        self.active_background_groups.fetch_add(1, Ordering::SeqCst);
         let active_counter = self.active_background_groups.clone();
 
         let group_id = group.group_id.clone();
@@ -294,6 +304,7 @@ impl TaskOrchestrator {
         let api = self.api.clone();
         let progress_tx = self.progress_tx.clone();
         let timeout_secs = self.config.background_timeout_secs;
+        let max_concurrent = self.config.max_concurrent_subtasks;
 
         tokio::spawn(async move {
             let _ = progress_tx.send(OutgoingMessage {
@@ -302,11 +313,14 @@ impl TaskOrchestrator {
                 reply_to: reply_to.clone(),
             }).await;
 
+            let semaphore = Arc::new(Semaphore::new(max_concurrent));
             let mut handles = Vec::new();
             for task in group.tasks {
                 let api = api.clone();
                 let reg = registry.clone();
+                let sem = semaphore.clone();
                 handles.push(tokio::spawn(async move {
+                    let _permit = sem.acquire().await.expect("semaphore closed");
                     Self::run_subtask(api, reg, task, timeout_secs).await
                 }));
             }
@@ -333,6 +347,12 @@ impl TaskOrchestrator {
                             channel: channel.clone(),
                             reply_to: reply_to.clone(),
                         }).await;
+                        results.push(SubTaskResult {
+                            task_id: "unknown".to_string(),
+                            status: SubTaskStatus::Failed,
+                            output: format!("Task panicked: {}", e),
+                            tokens_used: Usage { input_tokens: 0, output_tokens: 0 },
+                        });
                     }
                 }
             }

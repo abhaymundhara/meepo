@@ -197,10 +197,7 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
         background_timeout_secs: cfg.orchestrator.background_timeout_secs,
         max_background_groups: cfg.orchestrator.max_background_groups,
     };
-    let orchestrator_api = meepo_core::api::ApiClient::new(
-        shellexpand_str(&cfg.providers.anthropic.api_key),
-        Some(cfg.agent.default_model.clone()),
-    ).with_max_tokens(cfg.agent.max_tokens);
+    let orchestrator_api = api.clone();
     let orchestrator = Arc::new(meepo_core::orchestrator::TaskOrchestrator::new(
         orchestrator_api,
         progress_tx,

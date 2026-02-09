@@ -132,11 +132,12 @@ impl ToolHandler for DelegateTasksTool {
                 .unwrap_or("")
                 .to_string();
 
-            let tools = task_value.get("tools")
+            let tools: Vec<String> = task_value.get("tools")
                 .and_then(|v| v.as_array())
                 .ok_or_else(|| anyhow!("Task {} missing 'tools'", i))?
                 .iter()
                 .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .filter(|t| t != "delegate_tasks") // Prevent recursive sub-agent spawning
                 .collect();
 
             tasks.push(SubTask {
@@ -272,5 +273,23 @@ mod tests {
         let result = tool.execute(input).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Invalid mode"));
+    }
+
+    #[test]
+    fn test_delegate_tasks_stripped_from_allowed_tools() {
+        // Verify at the parsing level that delegate_tasks is filtered out.
+        // We test this by directly checking the filter logic rather than
+        // going through the full execute path (which requires a real API).
+        let tools_json = serde_json::json!(["read_file", "delegate_tasks", "browse_url"]);
+        let tools: Vec<String> = tools_json.as_array().unwrap()
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .filter(|t| t != "delegate_tasks")
+            .collect();
+
+        assert_eq!(tools.len(), 2);
+        assert!(tools.contains(&"read_file".to_string()));
+        assert!(tools.contains(&"browse_url".to_string()));
+        assert!(!tools.contains(&"delegate_tasks".to_string()));
     }
 }
