@@ -18,10 +18,10 @@ Meepo runs as a daemon on your machine, monitoring your configured channels for 
 ## Requirements
 
 - macOS or Windows
-- Rust toolchain (`rustup`)
 - Anthropic API key (required)
 - Optional: Tavily API key (enables web search)
 - Optional: Discord bot token, Slack bot token
+- Rust toolchain only needed when building from source
 
 ### Platform Notes
 
@@ -36,34 +36,39 @@ Meepo runs as a daemon on your machine, monitoring your configured channels for 
 | Email channel | Mail.app polling | Not available (use email tools instead) |
 | Background service | `launchd` agent | Windows Task Scheduler |
 
-## Quick Start
+## Install
 
-The easiest way to get started is the interactive setup script:
-
-**macOS:**
+**macOS / Linux (curl):**
 ```bash
-git clone https://github.com/kavymi/meepo.git
-cd meepo
-./scripts/setup.sh
+curl -sSL https://raw.githubusercontent.com/kavymi/meepo/main/install.sh | bash
+```
+
+**macOS (Homebrew):**
+```bash
+brew install kavymi/tap/meepo
+meepo setup
 ```
 
 **Windows (PowerShell):**
 ```powershell
-git clone https://github.com/kavymi/meepo.git
-cd meepo
-.\scripts\setup.ps1
+irm https://raw.githubusercontent.com/kavymi/meepo/main/install.ps1 | iex
 ```
 
-This walks you through building, configuring API keys, and enabling channels step by step.
+**From source:**
+```bash
+git clone https://github.com/kavymi/meepo.git && cd meepo
+cargo build --release && ./target/release/meepo setup
+```
 
-Or do it manually:
+All methods run `meepo setup` — an interactive wizard that configures your API keys and tests the connection.
+
+## Setup Guide
+
+After installing, the `meepo setup` wizard walks you through everything. Or configure manually:
 
 ```bash
-# Build
-cargo build --release
-
 # Initialize config
-./target/release/meepo init
+meepo init
 
 # Set your API key (get one at https://console.anthropic.com/settings/keys)
 export ANTHROPIC_API_KEY="sk-ant-..."
@@ -72,10 +77,10 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 nano ~/.meepo/config.toml
 
 # Start the agent
-./target/release/meepo start
+meepo start
 
 # Or ask a one-shot question (no daemon needed)
-./target/release/meepo ask "What's on my calendar today?"
+meepo ask "What's on my calendar today?"
 ```
 
 ## Setup Guide
