@@ -29,6 +29,7 @@ pub enum ChannelType {
     Discord,
     Slack,
     IMessage,
+    Email,
     Internal, // for watcher-generated messages
 }
 
@@ -38,6 +39,7 @@ impl std::fmt::Display for ChannelType {
             Self::Discord => write!(f, "discord"),
             Self::Slack => write!(f, "slack"),
             Self::IMessage => write!(f, "imessage"),
+            Self::Email => write!(f, "email"),
             Self::Internal => write!(f, "internal"),
         }
     }
