@@ -50,11 +50,12 @@ enabled = false
 bot_token = "${SLACK_BOT_TOKEN}"
 poll_interval_secs = 3
 
-# ── iMessage ─────────────────────────────────────────────────────
+# ── iMessage (macOS only) ────────────────────────────────────────
 # No API key needed — uses macOS Messages.app directly.
 # Requires: Full Disk Access for your terminal app.
 #   System Settings → Privacy & Security → Full Disk Access → toggle ON
 # Messages starting with trigger_prefix are processed; replies via AppleScript.
+# NOTE: This channel is not available on Windows.
 
 [channels.imessage]
 enabled = false
@@ -62,7 +63,7 @@ poll_interval_secs = 3
 trigger_prefix = "/d"
 allowed_contacts = []                   # e.g. ["+15551234567", "me@icloud.com"]
 
-# ── Email Channel ────────────────────────────────────────────────
+# ── Email Channel (macOS only) ──────────────────────────────────
 # Talk to Meepo via email through Mail.app. Works with any email
 # account configured in Mail.app (Gmail, iCloud, etc.).
 #
@@ -75,6 +76,9 @@ allowed_contacts = []                   # e.g. ["+15551234567", "me@icloud.com"]
 #   - macOS Mail.app with at least one email account configured
 #   - Automation permissions for your terminal app:
 #     System Settings → Privacy & Security → Automation → Terminal → Mail
+#
+# NOTE: This channel is not available on Windows.
+# On Windows, use the read_emails/send_email tools which use Outlook via PowerShell.
 #
 # Example: Send an email with subject "[meepo] What's on my calendar?"
 

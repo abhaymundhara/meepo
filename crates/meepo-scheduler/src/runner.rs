@@ -577,12 +577,21 @@ async fn poll_watcher(
             subject_contains,
             ..
         } => {
-            debug!(
-                "Polling email watcher {} (from: {:?}, subject: {:?})",
-                watcher.id, from, subject_contains
-            );
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = (from, subject_contains, event_tx, state);
+                warn!("Email watcher {} skipped — AppleScript polling is macOS-only", watcher.id);
+                return Ok(());
+            }
 
-            let script = r#"
+            #[cfg(target_os = "macos")]
+            {
+                debug!(
+                    "Polling email watcher {} (from: {:?}, subject: {:?})",
+                    watcher.id, from, subject_contains
+                );
+
+                let script = r#"
 tell application "Mail"
     try
         set msgs to messages 1 thru 20 of inbox
@@ -601,97 +610,107 @@ tell application "Mail"
 end tell
 "#;
 
-            let output = tokio::time::timeout(
-                std::time::Duration::from_secs(30),
-                Command::new("osascript")
-                    .arg("-e")
-                    .arg(script)
-                    .output()
-            )
-            .await
-            .map_err(|_| anyhow::anyhow!("AppleScript execution timed out after 30 seconds"))??;
+                let output = tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    Command::new("osascript")
+                        .arg("-e")
+                        .arg(script)
+                        .output()
+                )
+                .await
+                .map_err(|_| anyhow::anyhow!("AppleScript execution timed out after 30 seconds"))??;
 
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                warn!("Email polling failed: {}", stderr);
-                return Ok(());
-            }
-
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if stdout.starts_with("Error:") {
-                warn!("Email polling returned error: {}", stdout);
-                return Ok(());
-            }
-
-            for entry in stdout.split("---\n").filter(|e| !e.trim().is_empty()) {
-                let mut email_from = String::new();
-                let mut email_subject = String::new();
-                let mut email_date = String::new();
-                let mut email_body = String::new();
-
-                for line in entry.lines() {
-                    if let Some(val) = line.strip_prefix("From: ") {
-                        email_from = val.trim().to_string();
-                    } else if let Some(val) = line.strip_prefix("Subject: ") {
-                        email_subject = val.trim().to_string();
-                    } else if let Some(val) = line.strip_prefix("Date: ") {
-                        email_date = val.trim().to_string();
-                    } else if let Some(val) = line.strip_prefix("Body: ") {
-                        email_body = val.trim().to_string();
-                    }
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    warn!("Email polling failed: {}", stderr);
+                    return Ok(());
                 }
 
-                // Filter by criteria
-                if let Some(filter_from) = from {
-                    if !email_from.to_lowercase().contains(&filter_from.to_lowercase()) {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if stdout.starts_with("Error:") {
+                    warn!("Email polling returned error: {}", stdout);
+                    return Ok(());
+                }
+
+                for entry in stdout.split("---\n").filter(|e| !e.trim().is_empty()) {
+                    let mut email_from = String::new();
+                    let mut email_subject = String::new();
+                    let mut email_date = String::new();
+                    let mut email_body = String::new();
+
+                    for line in entry.lines() {
+                        if let Some(val) = line.strip_prefix("From: ") {
+                            email_from = val.trim().to_string();
+                        } else if let Some(val) = line.strip_prefix("Subject: ") {
+                            email_subject = val.trim().to_string();
+                        } else if let Some(val) = line.strip_prefix("Date: ") {
+                            email_date = val.trim().to_string();
+                        } else if let Some(val) = line.strip_prefix("Body: ") {
+                            email_body = val.trim().to_string();
+                        }
+                    }
+
+                    // Filter by criteria
+                    if let Some(filter_from) = from {
+                        if !email_from.to_lowercase().contains(&filter_from.to_lowercase()) {
+                            continue;
+                        }
+                    }
+                    if let Some(filter_subject) = subject_contains {
+                        if !email_subject.to_lowercase().contains(&filter_subject.to_lowercase()) {
+                            continue;
+                        }
+                    }
+
+                    // Dedup - check if we've seen this before
+                    let hash_key = format!("{}|{}|{}", email_from, email_subject, email_date);
+                    let hash = PollState::hash_item(&hash_key);
+                    if state.seen_hashes.get(&hash).is_some() {
                         continue;
                     }
-                }
-                if let Some(filter_subject) = subject_contains {
-                    if !email_subject.to_lowercase().contains(&filter_subject.to_lowercase()) {
-                        continue;
+                    state.seen_hashes.put(hash, ());
+
+                    // Truncate body for the event (char-safe to avoid slicing mid-UTF-8)
+                    let body_preview = if email_body.chars().count() > 500 {
+                        let truncated: String = email_body.chars().take(497).collect();
+                        format!("{}...", truncated)
+                    } else {
+                        email_body
+                    };
+
+                    let event = WatcherEvent::email(
+                        watcher.id.clone(),
+                        email_from,
+                        email_subject,
+                        body_preview,
+                    );
+
+                    if let Err(e) = event_tx.send(event) {
+                        error!("Failed to send email event: {}", e);
                     }
-                }
-
-                // Dedup - check if we've seen this before
-                let hash_key = format!("{}|{}|{}", email_from, email_subject, email_date);
-                let hash = PollState::hash_item(&hash_key);
-                if state.seen_hashes.get(&hash).is_some() {
-                    continue;
-                }
-                state.seen_hashes.put(hash, ());
-
-                // Truncate body for the event (char-safe to avoid slicing mid-UTF-8)
-                let body_preview = if email_body.chars().count() > 500 {
-                    let truncated: String = email_body.chars().take(497).collect();
-                    format!("{}...", truncated)
-                } else {
-                    email_body
-                };
-
-                let event = WatcherEvent::email(
-                    watcher.id.clone(),
-                    email_from,
-                    email_subject,
-                    body_preview,
-                );
-
-                if let Err(e) = event_tx.send(event) {
-                    error!("Failed to send email event: {}", e);
                 }
             }
         }
         WatcherKind::CalendarWatch {
             lookahead_hours, ..
         } => {
-            debug!(
-                "Polling calendar watcher {} (lookahead: {}h)",
-                watcher.id, lookahead_hours
-            );
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = (lookahead_hours, event_tx, state);
+                warn!("Calendar watcher {} skipped — AppleScript polling is macOS-only", watcher.id);
+                return Ok(());
+            }
 
-            let days_ahead = (*lookahead_hours as f64 / 24.0).ceil().max(1.0) as u64;
-            let script = format!(
-                r#"
+            #[cfg(target_os = "macos")]
+            {
+                debug!(
+                    "Polling calendar watcher {} (lookahead: {}h)",
+                    watcher.id, lookahead_hours
+                );
+
+                let days_ahead = (*lookahead_hours as f64 / 24.0).ceil().max(1.0) as u64;
+                let script = format!(
+                    r#"
 tell application "Calendar"
     try
         set startDate to current date
@@ -710,59 +729,60 @@ tell application "Calendar"
     end try
 end tell
 "#,
-                days_ahead
-            );
-
-            let output = tokio::time::timeout(
-                std::time::Duration::from_secs(30),
-                Command::new("osascript")
-                    .arg("-e")
-                    .arg(&script)
-                    .output()
-            )
-            .await
-            .map_err(|_| anyhow::anyhow!("AppleScript execution timed out after 30 seconds"))??;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                warn!("Calendar polling failed: {}", stderr);
-                return Ok(());
-            }
-
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if stdout.starts_with("Error:") {
-                warn!("Calendar polling returned error: {}", stdout);
-                return Ok(());
-            }
-
-            for entry in stdout.split("---\n").filter(|e| !e.trim().is_empty()) {
-                let mut event_title = String::new();
-                let mut event_start = String::new();
-
-                for line in entry.lines() {
-                    if let Some(val) = line.strip_prefix("Event: ") {
-                        event_title = val.trim().to_string();
-                    } else if let Some(val) = line.strip_prefix("Start: ") {
-                        event_start = val.trim().to_string();
-                    }
-                }
-
-                // Dedup - check if we've seen this before
-                let hash_key = format!("{}|{}", event_title, event_start);
-                let hash = PollState::hash_item(&hash_key);
-                if state.seen_hashes.get(&hash).is_some() {
-                    continue;
-                }
-                state.seen_hashes.put(hash, ());
-
-                let event = WatcherEvent::calendar(
-                    watcher.id.clone(),
-                    event_title,
-                    Utc::now(), // Use current time as proxy since AppleScript date parsing is unreliable
+                    days_ahead
                 );
 
-                if let Err(e) = event_tx.send(event) {
-                    error!("Failed to send calendar event: {}", e);
+                let output = tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    Command::new("osascript")
+                        .arg("-e")
+                        .arg(&script)
+                        .output()
+                )
+                .await
+                .map_err(|_| anyhow::anyhow!("AppleScript execution timed out after 30 seconds"))??;
+
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    warn!("Calendar polling failed: {}", stderr);
+                    return Ok(());
+                }
+
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if stdout.starts_with("Error:") {
+                    warn!("Calendar polling returned error: {}", stdout);
+                    return Ok(());
+                }
+
+                for entry in stdout.split("---\n").filter(|e| !e.trim().is_empty()) {
+                    let mut event_title = String::new();
+                    let mut event_start = String::new();
+
+                    for line in entry.lines() {
+                        if let Some(val) = line.strip_prefix("Event: ") {
+                            event_title = val.trim().to_string();
+                        } else if let Some(val) = line.strip_prefix("Start: ") {
+                            event_start = val.trim().to_string();
+                        }
+                    }
+
+                    // Dedup - check if we've seen this before
+                    let hash_key = format!("{}|{}", event_title, event_start);
+                    let hash = PollState::hash_item(&hash_key);
+                    if state.seen_hashes.get(&hash).is_some() {
+                        continue;
+                    }
+                    state.seen_hashes.put(hash, ());
+
+                    let event = WatcherEvent::calendar(
+                        watcher.id.clone(),
+                        event_title,
+                        Utc::now(), // Use current time as proxy since AppleScript date parsing is unreliable
+                    );
+
+                    if let Err(e) = event_tx.send(event) {
+                        error!("Failed to send calendar event: {}", e);
+                    }
                 }
             }
         }

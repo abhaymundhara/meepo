@@ -1,36 +1,57 @@
 # Meepo
 
-A local AI agent for macOS that connects Claude to your digital life through Discord, Slack, and iMessage.
+A local AI agent for macOS and Windows that connects Claude to your digital life through Discord, Slack, and more.
 
-Meepo runs as a daemon on your Mac, monitoring your configured channels for messages. When you message it, it processes your request using Claude's API with access to 25 tools spanning email, calendar, web search, files, code, and a persistent knowledge graph.
+Meepo runs as a daemon on your machine, monitoring your configured channels for messages. When you message it, it processes your request using Claude's API with access to 25 tools spanning email, calendar, web search, files, code, and a persistent knowledge graph.
 
 ## Features
 
-- **Multi-channel messaging** — Discord DMs, Slack DMs, iMessage, or CLI one-shots
+- **Multi-channel messaging** — Discord DMs, Slack DMs, iMessage (macOS), or CLI one-shots
 - **25 built-in tools** — Read/send emails, manage calendar events, search the web, run commands, browse URLs, read/write files, manage code PRs, and more
+- **Cross-platform** — macOS (AppleScript) and Windows (PowerShell/Outlook COM) with platform abstraction layer
 - **Sub-agent delegation** — Breaks complex tasks into parallel sub-tasks or fires off background work you can check on later
 - **Web search** — Search the web and extract clean content from URLs via Tavily
 - **Knowledge graph** — Remembers entities, relationships, and conversations across sessions with Tantivy full-text search
 - **Scheduled watchers** — Monitor email, calendar, GitHub events, files, or run cron tasks
-- **macOS native** — Uses AppleScript for Mail.app, Calendar.app, and Messages integration
-- **Security hardened** — Command allowlists, path traversal protection, SSRF blocking, AppleScript input sanitization, 30s execution timeouts
+- **Security hardened** — Command allowlists, path traversal protection, SSRF blocking, input sanitization, 30s execution timeouts
 
 ## Requirements
 
-- macOS (for AppleScript integrations)
+- macOS or Windows
 - Rust toolchain (`rustup`)
 - Anthropic API key (required)
 - Optional: Tavily API key (enables web search)
 - Optional: Discord bot token, Slack bot token
 
+### Platform Notes
+
+| Feature | macOS | Windows |
+|---------|-------|---------|
+| Email (tool) | Mail.app via AppleScript | Outlook via PowerShell COM |
+| Calendar (tool) | Calendar.app via AppleScript | Outlook via PowerShell COM |
+| Clipboard | `arboard` crate (cross-platform) | `arboard` crate (cross-platform) |
+| App launching | `open` crate (cross-platform) | `open` crate (cross-platform) |
+| UI automation | System Events (AppleScript) | System.Windows.Automation (PowerShell) |
+| iMessage channel | Messages.app (SQLite + AppleScript) | Not available |
+| Email channel | Mail.app polling | Not available (use email tools instead) |
+| Background service | `launchd` agent | Windows Task Scheduler |
+
 ## Quick Start
 
 The easiest way to get started is the interactive setup script:
 
+**macOS:**
 ```bash
 git clone https://github.com/kavymi/meepo.git
 cd meepo
 ./scripts/setup.sh
+```
+
+**Windows (PowerShell):**
+```powershell
+git clone https://github.com/kavymi/meepo.git
+cd meepo
+.\scripts\setup.ps1
 ```
 
 This walks you through building, configuring API keys, and enabling channels step by step.
@@ -124,7 +145,7 @@ poll_interval_secs = 3
 
 Requires a Slack app with `chat:write`, `channels:read`, and `im:history` scopes. Create one at [api.slack.com/apps](https://api.slack.com/apps).
 
-#### iMessage
+#### iMessage (macOS only)
 
 ```toml
 [channels.imessage]
@@ -134,7 +155,7 @@ allowed_contacts = ["+15551234567", "user@icloud.com"]
 poll_interval_secs = 3
 ```
 
-No API key needed. Requires macOS with **Full Disk Access** granted to your terminal (System Settings > Privacy & Security > Full Disk Access).
+No API key needed. Requires macOS with **Full Disk Access** granted to your terminal (System Settings > Privacy & Security > Full Disk Access). Not available on Windows.
 
 Messages must start with the trigger prefix (default `/d`). Example: `/d What's on my calendar?`
 
@@ -228,8 +249,8 @@ Meepo registers 25 tools that Claude can use during conversations:
 
 | Category | Tools |
 |----------|-------|
-| **macOS** | `read_emails`, `send_email`, `read_calendar`, `create_calendar_event`, `open_app`, `get_clipboard` |
-| **Accessibility** | `read_screen`, `click_element`, `type_text` |
+| **Email & Calendar** | `read_emails`, `send_email`, `read_calendar`, `create_calendar_event`, `open_app`, `get_clipboard` |
+| **UI Automation** | `read_screen`, `click_element`, `type_text` |
 | **Code** | `write_code`, `make_pr`, `review_pr` |
 | **Web** | `web_search`, `browse_url` |
 | **Memory** | `remember`, `recall`, `search_knowledge`, `link_entities` |
@@ -243,7 +264,7 @@ See [docs/architecture.md](docs/architecture.md) for detailed architecture docum
 
 ## Running as a Background Service
 
-To run Meepo as a macOS launch agent (starts on login, auto-restarts):
+**macOS** — Install as a launchd agent (starts on login, auto-restarts):
 
 ```bash
 scripts/install.sh     # Install and start
@@ -251,6 +272,13 @@ scripts/uninstall.sh   # Remove
 ```
 
 Logs are at `~/.meepo/logs/meepo.out.log`.
+
+**Windows** — Install as a scheduled task (starts on login, auto-restarts):
+
+```powershell
+scripts\install.ps1     # Install and start (requires Administrator)
+scripts\uninstall.ps1   # Remove
+```
 
 ## Troubleshooting
 
@@ -291,9 +319,14 @@ meepo/
 ├── config/
 │   └── default.toml      # Default configuration template (heavily commented)
 ├── scripts/
-│   ├── setup.sh          # Interactive first-time setup
+│   ├── setup.sh          # Interactive first-time setup (macOS)
+│   ├── setup.ps1         # Interactive first-time setup (Windows)
 │   ├── install.sh        # Install as macOS launch agent
-│   └── uninstall.sh      # Remove launch agent
+│   ├── install.ps1       # Install as Windows scheduled task
+│   ├── uninstall.sh      # Remove macOS launch agent
+│   ├── uninstall.ps1     # Remove Windows scheduled task
+│   ├── run.sh            # Quick build-and-start (macOS)
+│   └── run.ps1           # Quick build-and-start (Windows)
 ├── docs/
 │   └── architecture.md   # Detailed architecture with Mermaid diagrams
 ├── CONTRIBUTING.md        # Developer setup and contribution guide

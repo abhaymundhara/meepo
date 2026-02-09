@@ -16,7 +16,7 @@ use config::MeepoConfig;
 #[derive(Parser)]
 #[command(name = "meepo")]
 #[command(version)]
-#[command(about = "Meepo — a local AI agent for macOS")]
+#[command(about = "Meepo — a local AI agent")]
 struct Cli {
     /// Path to config file
     #[arg(short, long, global = true)]
@@ -177,15 +177,20 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
 
     // Build tool registry
     let mut registry = meepo_core::tools::ToolRegistry::new();
-    registry.register(Arc::new(meepo_core::tools::macos::ReadEmailsTool));
-    registry.register(Arc::new(meepo_core::tools::macos::ReadCalendarTool));
-    registry.register(Arc::new(meepo_core::tools::macos::SendEmailTool));
-    registry.register(Arc::new(meepo_core::tools::macos::CreateEventTool));
-    registry.register(Arc::new(meepo_core::tools::macos::OpenAppTool));
-    registry.register(Arc::new(meepo_core::tools::macos::GetClipboardTool));
-    registry.register(Arc::new(meepo_core::tools::accessibility::ReadScreenTool));
-    registry.register(Arc::new(meepo_core::tools::accessibility::ClickElementTool));
-    registry.register(Arc::new(meepo_core::tools::accessibility::TypeTextTool));
+    // Email, calendar, and UI automation tools require macOS or Windows platform support
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        registry.register(Arc::new(meepo_core::tools::macos::ReadEmailsTool::new()));
+        registry.register(Arc::new(meepo_core::tools::macos::ReadCalendarTool::new()));
+        registry.register(Arc::new(meepo_core::tools::macos::SendEmailTool::new()));
+        registry.register(Arc::new(meepo_core::tools::macos::CreateEventTool::new()));
+        registry.register(Arc::new(meepo_core::tools::accessibility::ReadScreenTool::new()));
+        registry.register(Arc::new(meepo_core::tools::accessibility::ClickElementTool::new()));
+        registry.register(Arc::new(meepo_core::tools::accessibility::TypeTextTool::new()));
+    }
+    // Clipboard and app launcher are cross-platform (arboard + open crates)
+    registry.register(Arc::new(meepo_core::tools::macos::OpenAppTool::new()));
+    registry.register(Arc::new(meepo_core::tools::macos::GetClipboardTool::new()));
     registry.register(Arc::new(meepo_core::tools::code::WriteCodeTool));
     registry.register(Arc::new(meepo_core::tools::code::MakePrTool));
     registry.register(Arc::new(meepo_core::tools::code::ReviewPrTool));
@@ -301,7 +306,8 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
         info!("Discord channel registered");
     }
 
-    // Register iMessage channel if enabled
+    // Register iMessage channel if enabled (macOS only)
+    #[cfg(target_os = "macos")]
     if cfg.channels.imessage.enabled {
         let imessage = meepo_channels::imessage::IMessageChannel::new(
             std::time::Duration::from_secs(cfg.channels.imessage.poll_interval_secs),
@@ -311,6 +317,10 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
         );
         bus.register(Box::new(imessage));
         info!("iMessage channel registered");
+    }
+    #[cfg(not(target_os = "macos"))]
+    if cfg.channels.imessage.enabled {
+        warn!("iMessage channel is only available on macOS — ignoring");
     }
 
     // Register Slack channel if enabled
@@ -323,7 +333,8 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
         info!("Slack channel registered");
     }
 
-    // Register Email channel if enabled
+    // Register Email channel if enabled (macOS only — uses Mail.app)
+    #[cfg(target_os = "macos")]
     if cfg.channels.email.enabled {
         let email = meepo_channels::email::EmailChannel::new(
             std::time::Duration::from_secs(cfg.channels.email.poll_interval_secs),
@@ -331,6 +342,10 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
         );
         bus.register(Box::new(email));
         info!("Email channel registered");
+    }
+    #[cfg(not(target_os = "macos"))]
+    if cfg.channels.email.enabled {
+        warn!("Email channel (Mail.app) is only available on macOS — use the read_emails/send_email tools for Outlook on Windows");
     }
 
     // Start all channels
@@ -504,6 +519,19 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
 }
 
 async fn cmd_stop() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    let output = tokio::process::Command::new("pkill")
+        .args(["-f", "meepo start"])
+        .output()
+        .await?;
+
+    #[cfg(target_os = "windows")]
+    let output = tokio::process::Command::new("taskkill")
+        .args(["/IM", "meepo.exe", "/F"])
+        .output()
+        .await?;
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let output = tokio::process::Command::new("pkill")
         .args(["-f", "meepo start"])
         .output()

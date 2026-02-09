@@ -1,16 +1,18 @@
-//! Accessibility API tools for UI automation
+//! UI automation and accessibility tools
+//!
+//! These tools delegate to platform-specific implementations through the platform module.
+//! On macOS: AppleScript System Events-based implementations.
+//! On Windows: UI Automation-based implementations.
 
 use async_trait::async_trait;
 use serde_json::Value;
-use anyhow::{Result, Context};
-use tokio::process::Command;
-use std::time::Duration;
-use tracing::{debug, warn};
+use anyhow::Result;
+use tracing::debug;
 
 use super::{ToolHandler, json_schema};
-use super::macos::sanitize_applescript_string;
+use crate::platform::UiAutomation;
 
-/// Allowlist of valid AppleScript UI element types
+/// Allowlist of valid UI element types
 const VALID_ELEMENT_TYPES: &[&str] = &[
     "button", "checkbox", "radio button", "text field", "text area",
     "pop up button", "menu item", "menu button", "slider", "tab group",
@@ -20,7 +22,17 @@ const VALID_ELEMENT_TYPES: &[&str] = &[
 ];
 
 /// Read screen information (focused app and window)
-pub struct ReadScreenTool;
+pub struct ReadScreenTool {
+    provider: Box<dyn UiAutomation>,
+}
+
+impl ReadScreenTool {
+    pub fn new() -> Self {
+        Self {
+            provider: crate::platform::create_ui_automation(),
+        }
+    }
+}
 
 #[async_trait]
 impl ToolHandler for ReadScreenTool {
@@ -38,48 +50,22 @@ impl ToolHandler for ReadScreenTool {
 
     async fn execute(&self, _input: Value) -> Result<String> {
         debug!("Reading screen information");
-
-        let script = r#"
-tell application "System Events"
-    try
-        set frontApp to first application process whose frontmost is true
-        set appName to name of frontApp
-        try
-            set windowTitle to name of front window of frontApp
-            return "App: " & appName & "\nWindow: " & windowTitle
-        on error
-            return "App: " & appName & "\nWindow: (no window)"
-        end try
-    on error errMsg
-        return "Error: " & errMsg
-    end try
-end tell
-"#;
-
-        let output = tokio::time::timeout(
-            Duration::from_secs(30),
-            Command::new("osascript")
-                .arg("-e")
-                .arg(script)
-                .output()
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("Accessibility command timed out after 30 seconds"))?
-        .context("Failed to execute osascript")?;
-
-        if output.status.success() {
-            let result = String::from_utf8_lossy(&output.stdout).to_string();
-            Ok(result)
-        } else {
-            let error = String::from_utf8_lossy(&output.stderr).to_string();
-            warn!("Failed to read screen: {}", error);
-            Err(anyhow::anyhow!("Failed to read screen: {}", error))
-        }
+        self.provider.read_screen().await
     }
 }
 
 /// Click UI element by description
-pub struct ClickElementTool;
+pub struct ClickElementTool {
+    provider: Box<dyn UiAutomation>,
+}
+
+impl ClickElementTool {
+    pub fn new() -> Self {
+        Self {
+            provider: crate::platform::create_ui_automation(),
+        }
+    }
+}
 
 #[async_trait]
 impl ToolHandler for ClickElementTool {
@@ -115,55 +101,29 @@ impl ToolHandler for ClickElementTool {
             .and_then(|v| v.as_str())
             .unwrap_or("button");
 
-        // Validate element_type against allowlist and normalize to canonical lowercase form
+        // Input validation: validate element_type against allowlist and normalize to canonical lowercase form
         let element_type_normalized = VALID_ELEMENT_TYPES
             .iter()
             .find(|&&valid| valid.eq_ignore_ascii_case(element_type))
             .ok_or_else(|| anyhow::anyhow!("Invalid element type: {}", element_type))?;
 
         debug!("Clicking {} element: {}", element_type_normalized, element_name);
-
-        // Sanitize input to prevent AppleScript injection
-        let safe_element_name = sanitize_applescript_string(element_name);
-
-        let script = format!(r#"
-tell application "System Events"
-    try
-        set frontApp to first application process whose frontmost is true
-        tell frontApp
-            click {} "{}"
-        end tell
-        return "Clicked successfully"
-    on error errMsg
-        return "Error: " & errMsg
-    end try
-end tell
-"#, element_type_normalized, safe_element_name);
-
-        let output = tokio::time::timeout(
-            Duration::from_secs(30),
-            Command::new("osascript")
-                .arg("-e")
-                .arg(&script)
-                .output()
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("Accessibility command timed out after 30 seconds"))?
-        .context("Failed to execute osascript")?;
-
-        if output.status.success() {
-            let result = String::from_utf8_lossy(&output.stdout).to_string();
-            Ok(result)
-        } else {
-            let error = String::from_utf8_lossy(&output.stderr).to_string();
-            warn!("Failed to click element: {}", error);
-            Err(anyhow::anyhow!("Failed to click element: {}", error))
-        }
+        self.provider.click_element(element_name, element_type_normalized).await
     }
 }
 
 /// Type text using keyboard simulation
-pub struct TypeTextTool;
+pub struct TypeTextTool {
+    provider: Box<dyn UiAutomation>,
+}
+
+impl TypeTextTool {
+    pub fn new() -> Self {
+        Self {
+            provider: crate::platform::create_ui_automation(),
+        }
+    }
+}
 
 #[async_trait]
 impl ToolHandler for TypeTextTool {
@@ -192,45 +152,13 @@ impl ToolHandler for TypeTextTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'text' parameter"))?;
 
+        // Input validation: text length limit
         if text.len() > 50_000 {
             return Err(anyhow::anyhow!("Text too long ({} chars, max 50,000)", text.len()));
         }
 
         debug!("Typing text ({} chars)", text.len());
-
-        // Sanitize input to prevent AppleScript injection
-        let safe_text = sanitize_applescript_string(text);
-
-        let script = format!(r#"
-tell application "System Events"
-    try
-        keystroke "{}"
-        return "Text typed successfully"
-    on error errMsg
-        return "Error: " & errMsg
-    end try
-end tell
-"#, safe_text.replace('\n', "\" & return & \""));
-
-        let output = tokio::time::timeout(
-            Duration::from_secs(30),
-            Command::new("osascript")
-                .arg("-e")
-                .arg(&script)
-                .output()
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("Accessibility command timed out after 30 seconds"))?
-        .context("Failed to execute osascript")?;
-
-        if output.status.success() {
-            let result = String::from_utf8_lossy(&output.stdout).to_string();
-            Ok(result)
-        } else {
-            let error = String::from_utf8_lossy(&output.stderr).to_string();
-            warn!("Failed to type text: {}", error);
-            Err(anyhow::anyhow!("Failed to type text: {}", error))
-        }
+        self.provider.type_text(text).await
     }
 }
 
@@ -241,14 +169,14 @@ mod tests {
 
     #[test]
     fn test_read_screen_schema() {
-        let tool = ReadScreenTool;
+        let tool = ReadScreenTool::new();
         assert_eq!(tool.name(), "read_screen");
         assert!(!tool.description().is_empty());
     }
 
     #[test]
     fn test_click_element_schema() {
-        let tool = ClickElementTool;
+        let tool = ClickElementTool::new();
         assert_eq!(tool.name(), "click_element");
         let schema = tool.input_schema();
         assert!(schema.get("properties").is_some());
@@ -256,7 +184,7 @@ mod tests {
 
     #[test]
     fn test_type_text_schema() {
-        let tool = TypeTextTool;
+        let tool = TypeTextTool::new();
         assert_eq!(tool.name(), "type_text");
         let schema = tool.input_schema();
         assert!(schema.get("properties").is_some());
@@ -264,32 +192,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_click_element_missing_params() {
-        let tool = ClickElementTool;
+        let tool = ClickElementTool::new();
         let result = tool.execute(serde_json::json!({})).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_type_text_missing_params() {
-        let tool = TypeTextTool;
+        let tool = TypeTextTool::new();
         let result = tool.execute(serde_json::json!({})).await;
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_accessibility_uses_sanitization() {
-        // Verify that sanitize_applescript_string handles special characters
-        let malicious_input = "test\"; do shell script \"rm -rf /\" --\"";
-        let sanitized = sanitize_applescript_string(malicious_input);
-
-        // Should have escaped quotes and removed/replaced problematic characters
-        assert!(sanitized.contains("\\\""));
-        assert!(!sanitized.contains('\n'));
-
-        // Test that newlines are replaced with spaces
-        let with_newlines = "line1\nline2\rline3";
-        let sanitized = sanitize_applescript_string(with_newlines);
-        assert!(!sanitized.contains('\n'));
-        assert!(!sanitized.contains('\r'));
     }
 }
