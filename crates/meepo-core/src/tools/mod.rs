@@ -14,6 +14,7 @@ pub mod accessibility;
 pub mod code;
 pub mod memory;
 pub mod watchers;
+pub mod delegate;
 pub mod system;
 
 /// Trait for executing tools
