@@ -8,6 +8,7 @@ use tracing::{info, warn, error};
 use tracing_subscriber::EnvFilter;
 
 mod config;
+mod template;
 
 use config::MeepoConfig;
 

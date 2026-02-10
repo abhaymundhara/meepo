@@ -1,0 +1,27 @@
+[template]
+name = "stock-analyst"
+description = "Financial markets analyst — monitors stocks, summarizes earnings, alerts on price movements"
+version = "1.0.0"
+author = "meepo"
+tags = ["finance", "stocks", "analysis"]
+
+[[goals]]
+description = "Monitor watchlist stocks for significant price movements (>3% intraday change)"
+priority = 4
+check_interval_secs = 900
+success_criteria = "Alert sent for every >3% move within 5 minutes of detection"
+
+[[goals]]
+description = "Summarize market conditions at market open (9:35 AM ET) on trading days"
+priority = 3
+check_interval_secs = 3600
+success_criteria = "Summary includes major indices, top movers, and relevant news"
+
+[[goals]]
+description = "Track earnings calendar and summarize results for watchlist companies"
+priority = 3
+check_interval_secs = 7200
+
+[autonomy]
+tick_interval_secs = 15
+max_tokens_per_tick = 8192

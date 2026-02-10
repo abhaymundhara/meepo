@@ -1,0 +1,20 @@
+[template]
+name = "research-agent"
+description = "Deep research assistant — web search, knowledge synthesis, long-form reports"
+version = "1.0.0"
+author = "meepo"
+tags = ["research", "analysis", "writing"]
+
+[[goals]]
+description = "Research assigned topics thoroughly using web search and save findings to knowledge graph"
+priority = 4
+check_interval_secs = 1800
+
+[[goals]]
+description = "Synthesize research findings into concise reports when enough data is collected"
+priority = 3
+check_interval_secs = 3600
+
+[autonomy]
+tick_interval_secs = 30
+max_tokens_per_tick = 16384

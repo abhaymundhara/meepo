@@ -1,0 +1,21 @@
+[template]
+name = "code-reviewer"
+description = "GitHub PR reviewer — daily triage, automated review comments, code quality analysis"
+version = "1.0.0"
+author = "meepo"
+tags = ["code", "github", "review"]
+
+[[goals]]
+description = "Triage open PRs daily — summarize what needs review and flag stale PRs"
+priority = 4
+check_interval_secs = 3600
+success_criteria = "Daily summary of open PRs with age, size, and review status"
+
+[[goals]]
+description = "Review new PRs for code quality, security, and test coverage"
+priority = 4
+check_interval_secs = 1800
+
+[autonomy]
+tick_interval_secs = 30
+max_tokens_per_tick = 8192

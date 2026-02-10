@@ -1,0 +1,21 @@
+[template]
+name = "personal-assistant"
+description = "Daily assistant — morning briefings, calendar management, reminders, email triage"
+version = "1.0.0"
+author = "meepo"
+tags = ["assistant", "calendar", "email", "productivity"]
+
+[[goals]]
+description = "Prepare a morning briefing with calendar, unread emails, and pending reminders"
+priority = 3
+check_interval_secs = 3600
+success_criteria = "Briefing sent by 8:30 AM on weekdays"
+
+[[goals]]
+description = "Monitor incoming emails and flag urgent ones that need attention"
+priority = 4
+check_interval_secs = 600
+
+[autonomy]
+tick_interval_secs = 30
+min_confidence_to_act = 0.6
