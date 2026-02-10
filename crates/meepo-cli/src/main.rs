@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -54,6 +54,45 @@ enum Commands {
 
     /// Run as an MCP server (STDIO transport)
     McpServer,
+
+    /// Manage agent templates
+    Template {
+        #[command(subcommand)]
+        action: TemplateAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum TemplateAction {
+    /// List available templates (built-in + installed)
+    List,
+
+    /// Activate a template (overlay on current config)
+    Use {
+        /// Template name, path, or gh:user/repo/path
+        name: String,
+    },
+
+    /// Show what a template will change
+    Info {
+        /// Template name or path
+        name: String,
+    },
+
+    /// Remove active template and restore previous config
+    Reset,
+
+    /// Create a new template from current config
+    Create {
+        /// Name for the new template
+        name: String,
+    },
+
+    /// Remove an installed template
+    Remove {
+        /// Template name to remove
+        name: String,
+    },
 }
 
 #[tokio::main]
@@ -78,6 +117,7 @@ async fn main() -> Result<()> {
         Commands::Stop => cmd_stop().await,
         Commands::Ask { message } => cmd_ask(&cli.config, &message).await,
         Commands::McpServer => cmd_mcp_server(&cli.config).await,
+        Commands::Template { action } => cmd_template(action).await,
     }
 }
 
@@ -1281,6 +1321,277 @@ async fn cmd_mcp_server(config_path: &Option<PathBuf>) -> Result<()> {
 
     // Serve over STDIO
     server.serve_stdio().await
+}
+
+async fn cmd_template(action: TemplateAction) -> Result<()> {
+    match action {
+        TemplateAction::List => {
+            let templates = template::list_templates();
+            if templates.is_empty() {
+                println!("No templates available.");
+                return Ok(());
+            }
+            println!("\n  Available Templates\n  ───────────────────\n");
+            for (name, description, source) in &templates {
+                println!("  {:20} ({}) — {}", name, source, description);
+            }
+            if let Some(active) = template::get_active_template() {
+                println!("\n  Active: {} (since {})", active.name, &active.activated_at[..10]);
+            }
+            println!();
+            Ok(())
+        }
+        TemplateAction::Use { name } => {
+            let t = template::resolve_template(&name)?;
+            println!("\n  Activating template: {}", t.metadata.name);
+            println!("  {}\n", t.metadata.description);
+
+            let config_dir = config::config_dir();
+            let config_path = config_dir.join("config.toml");
+            let workspace = config_dir.join("workspace");
+
+            // 1. Backup current config
+            if config_path.exists() {
+                std::fs::copy(&config_path, config_dir.join("config.toml.bak"))?;
+                println!("  Backed up config.toml → config.toml.bak");
+            }
+
+            // 2. Backup and replace SOUL.md
+            let soul_path = workspace.join("SOUL.md");
+            if soul_path.exists() {
+                std::fs::copy(&soul_path, workspace.join("SOUL.md.bak"))?;
+            }
+            if let Some(soul) = template::get_template_soul(&t)? {
+                std::fs::create_dir_all(&workspace)?;
+                std::fs::write(&soul_path, &soul)?;
+                println!("  Installed SOUL.md ({} chars)", soul.len());
+            }
+
+            // 3. Replace MEMORY.md if template provides one
+            if let Some(memory) = template::get_template_memory(&t)? {
+                let memory_path = workspace.join("MEMORY.md");
+                if memory_path.exists() {
+                    std::fs::copy(&memory_path, workspace.join("MEMORY.md.bak"))?;
+                }
+                std::fs::write(&memory_path, &memory)?;
+                println!("  Installed MEMORY.md ({} chars)", memory.len());
+            }
+
+            // 4. Deep-merge config overlay
+            if config_path.exists() {
+                let config_content = std::fs::read_to_string(&config_path)?;
+                let mut config_val: toml::Value = toml::from_str(&config_content)
+                    .context("Failed to parse current config.toml")?;
+                template::deep_merge(&mut config_val, &t.config_overlay);
+                let merged = toml::to_string_pretty(&config_val)?;
+                std::fs::write(&config_path, &merged)?;
+                println!("  Merged config overlay");
+            }
+
+            // 5. Insert goals into database
+            if !t.goals.is_empty() {
+                let db_path = config_dir.join("knowledge.db");
+                if db_path.exists() {
+                    let db = meepo_knowledge::KnowledgeDb::new(&db_path)?;
+                    let source = format!("template:{}", t.metadata.name);
+                    for goal in &t.goals {
+                        db.insert_goal(
+                            &goal.description,
+                            goal.priority,
+                            goal.check_interval_secs,
+                            goal.success_criteria.as_deref(),
+                            None,
+                            &source,
+                        ).await?;
+                    }
+                    println!("  Injected {} goals", t.goals.len());
+                } else {
+                    println!("  Note: knowledge.db not found — goals will be injected on first `meepo start`");
+                }
+            }
+
+            // 6. Copy skills if present
+            let skills_src = t.dir.join("skills");
+            if skills_src.exists() && skills_src.is_dir() {
+                let skills_dst = config_dir.join("skills");
+                std::fs::create_dir_all(&skills_dst)?;
+                let mut count = 0;
+                for entry in std::fs::read_dir(&skills_src)?.flatten() {
+                    let dst = skills_dst.join(entry.file_name());
+                    if entry.path().is_dir() {
+                        copy_dir_recursive(&entry.path(), &dst)?;
+                        count += 1;
+                    }
+                }
+                if count > 0 {
+                    println!("  Installed {} skills", count);
+                }
+            }
+
+            // 7. Record active template
+            template::set_active_template(&t.metadata.name, "local")?;
+
+            println!("\n  Template '{}' activated!", t.metadata.name);
+            println!("  Restart the daemon for changes to take effect: meepo stop && meepo start\n");
+            Ok(())
+        }
+        TemplateAction::Info { name } => {
+            let t = template::resolve_template(&name)?;
+            println!("\n  Template: {}", t.metadata.name);
+            println!("  Description: {}", t.metadata.description);
+            println!("  Version: {}", t.metadata.version);
+            if !t.metadata.author.is_empty() {
+                println!("  Author: {}", t.metadata.author);
+            }
+            if !t.metadata.tags.is_empty() {
+                println!("  Tags: {}", t.metadata.tags.join(", "));
+            }
+            println!("\n  Goals ({}):", t.goals.len());
+            for goal in &t.goals {
+                println!("    - [P{}] {} (every {}s)", goal.priority, goal.description, goal.check_interval_secs);
+            }
+            if let Some(overlay) = t.config_overlay.as_table() {
+                if !overlay.is_empty() {
+                    println!("\n  Config overlay:");
+                    for key in overlay.keys() {
+                        println!("    [{}]", key);
+                    }
+                }
+            }
+            if let Some(soul) = template::get_template_soul(&t)? {
+                println!("\n  SOUL.md: {} chars", soul.len());
+            }
+            println!();
+            Ok(())
+        }
+        TemplateAction::Reset => {
+            let config_dir = config::config_dir();
+
+            let active = template::get_active_template();
+            if active.is_none() {
+                println!("No active template to reset.");
+                return Ok(());
+            }
+            let active = active.unwrap();
+            println!("\n  Resetting template: {}", active.name);
+
+            // 1. Restore config.toml
+            let bak = config_dir.join("config.toml.bak");
+            if bak.exists() {
+                std::fs::copy(&bak, config_dir.join("config.toml"))?;
+                std::fs::remove_file(&bak)?;
+                println!("  Restored config.toml from backup");
+            }
+
+            // 2. Restore SOUL.md
+            let workspace = config_dir.join("workspace");
+            let soul_bak = workspace.join("SOUL.md.bak");
+            if soul_bak.exists() {
+                std::fs::copy(&soul_bak, workspace.join("SOUL.md"))?;
+                std::fs::remove_file(&soul_bak)?;
+                println!("  Restored SOUL.md from backup");
+            }
+
+            // 3. Restore MEMORY.md
+            let memory_bak = workspace.join("MEMORY.md.bak");
+            if memory_bak.exists() {
+                std::fs::copy(&memory_bak, workspace.join("MEMORY.md"))?;
+                std::fs::remove_file(&memory_bak)?;
+                println!("  Restored MEMORY.md from backup");
+            }
+
+            // 4. Delete template goals
+            let db_path = config_dir.join("knowledge.db");
+            if db_path.exists() {
+                let db = meepo_knowledge::KnowledgeDb::new(&db_path)?;
+                let source = format!("template:{}", active.name);
+                let deleted = db.delete_goals_by_source(&source).await?;
+                println!("  Removed {} template goals", deleted);
+            }
+
+            // 5. Clear active template
+            template::clear_active_template()?;
+
+            println!("\n  Template reset complete!");
+            println!("  Restart the daemon: meepo stop && meepo start\n");
+            Ok(())
+        }
+        TemplateAction::Create { name } => {
+            let config_dir = config::config_dir();
+            let template_dir = config_dir.join("templates").join(&name);
+
+            if template_dir.exists() {
+                bail!("Template '{}' already exists at {}", name, template_dir.display());
+            }
+
+            std::fs::create_dir_all(&template_dir)?;
+
+            // Copy current SOUL.md
+            let workspace = config_dir.join("workspace");
+            let soul_src = workspace.join("SOUL.md");
+            if soul_src.exists() {
+                std::fs::copy(&soul_src, template_dir.join("SOUL.md"))?;
+            }
+
+            // Create template.toml scaffold
+            let template_toml = format!(
+                r#"[template]
+name = "{name}"
+description = "Custom agent template"
+version = "0.1.0"
+author = ""
+tags = []
+
+# Add goals below:
+# [[goals]]
+# description = "Your goal here"
+# priority = 3
+# check_interval_secs = 1800
+
+# Add config overrides below (same format as config.toml):
+# [autonomy]
+# tick_interval_secs = 30
+"#
+            );
+            std::fs::write(template_dir.join("template.toml"), template_toml)?;
+
+            println!("\n  Created template scaffold at {}", template_dir.display());
+            println!("  Edit template.toml and SOUL.md, then activate with:");
+            println!("    meepo template use {}\n", name);
+            Ok(())
+        }
+        TemplateAction::Remove { name } => {
+            let template_dir = config::config_dir().join("templates").join(&name);
+            if !template_dir.exists() {
+                bail!("Template '{}' not found at {}", name, template_dir.display());
+            }
+
+            // Check if active
+            if let Some(active) = template::get_active_template() {
+                if active.name == name {
+                    bail!("Template '{}' is currently active. Run `meepo template reset` first.", name);
+                }
+            }
+
+            std::fs::remove_dir_all(&template_dir)?;
+            println!("Removed template '{}'.", name);
+            Ok(())
+        }
+    }
+}
+
+/// Recursively copy a directory
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)?.flatten() {
+        let target = dst.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir_recursive(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
 }
 
 // Utility: expand ~ and env vars in paths
