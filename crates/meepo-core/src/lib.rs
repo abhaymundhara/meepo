@@ -22,7 +22,7 @@ pub mod types;
 pub use agent::Agent;
 pub use api::{ApiClient, ApiMessage, ApiResponse, ContentBlock, MessageContent, ToolDefinition};
 pub use autonomy::{AutonomousLoop, AutonomyConfig};
-pub use context::{build_system_prompt, load_memory, load_soul};
+pub use context::build_system_prompt;
 pub use orchestrator::{
     ExecutionMode, FilteredToolExecutor, OrchestratorConfig,
     SubTask, SubTaskResult, SubTaskStatus, TaskGroup, TaskOrchestrator,

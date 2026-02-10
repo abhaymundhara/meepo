@@ -1,31 +1,6 @@
 //! Context loading and system prompt building
 
-use anyhow::{Context, Result};
-use std::path::Path;
-use tracing::{debug, warn};
-
-/// Load SOUL.md content from file
-pub fn load_soul<P: AsRef<Path>>(path: P) -> Result<String> {
-    let content = std::fs::read_to_string(path.as_ref())
-        .with_context(|| format!("Failed to load SOUL from {:?}", path.as_ref()))?;
-
-    debug!("Loaded SOUL.md ({} bytes)", content.len());
-    Ok(content)
-}
-
-/// Load MEMORY.md content from file
-pub fn load_memory<P: AsRef<Path>>(path: P) -> Result<String> {
-    match std::fs::read_to_string(path.as_ref()) {
-        Ok(content) => {
-            debug!("Loaded MEMORY.md ({} bytes)", content.len());
-            Ok(content)
-        }
-        Err(e) => {
-            warn!("Failed to load MEMORY.md: {}. Using empty memory.", e);
-            Ok(String::new())
-        }
-    }
-}
+use tracing::debug;
 
 /// Build complete system prompt from components
 pub fn build_system_prompt(soul: &str, memory: &str, extra_context: &str) -> String {
@@ -73,19 +48,6 @@ pub fn build_system_prompt(soul: &str, memory: &str, extra_context: &str) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_load_soul() -> Result<()> {
-        let mut file = NamedTempFile::new()?;
-        writeln!(file, "I am a helpful assistant")?;
-
-        let content = load_soul(file.path())?;
-        assert!(content.contains("helpful assistant"));
-
-        Ok(())
-    }
 
     #[test]
     fn test_build_system_prompt() {

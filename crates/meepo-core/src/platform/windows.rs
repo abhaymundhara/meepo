@@ -9,7 +9,7 @@ use super::{EmailProvider, CalendarProvider, UiAutomation};
 
 /// Sanitize a string for safe use in PowerShell
 /// Escapes backticks, dollar signs, double/single quotes, and control characters
-pub fn sanitize_powershell_string(input: &str) -> String {
+fn sanitize_powershell_string(input: &str) -> String {
     input
         .replace('`', "``")
         .replace('$', "`$")

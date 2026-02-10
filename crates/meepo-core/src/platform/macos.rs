@@ -8,7 +8,7 @@ use tracing::{debug, warn};
 use super::{EmailProvider, CalendarProvider, UiAutomation, RemindersProvider, NotesProvider, NotificationProvider, ScreenCaptureProvider, MusicProvider, ContactsProvider};
 
 /// Sanitize a string for safe use in AppleScript
-pub fn sanitize_applescript_string(input: &str) -> String {
+fn sanitize_applescript_string(input: &str) -> String {
     input
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
