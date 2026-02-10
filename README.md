@@ -54,10 +54,16 @@ meepo setup
 irm https://raw.githubusercontent.com/kavymi/meepo/main/install.ps1 | iex
 ```
 
-**From source:**
+**From source (macOS/Linux):**
 ```bash
 git clone https://github.com/kavymi/meepo.git && cd meepo
 cargo build --release && ./target/release/meepo setup
+```
+
+**From source (Windows PowerShell):**
+```powershell
+git clone https://github.com/kavymi/meepo.git; cd meepo
+cargo build --release; .\target\release\meepo.exe setup
 ```
 
 All methods run `meepo setup` — an interactive wizard that configures your API keys and tests the connection.
@@ -72,7 +78,7 @@ cd meepo
 cargo build --release
 ```
 
-The binary is at `target/release/meepo` (~19MB).
+The binary is at `target/release/meepo` (macOS/Linux) or `target\release\meepo.exe` (Windows). First build takes ~5 minutes.
 
 ### 2. Initialize
 
@@ -90,7 +96,13 @@ This creates `~/.meepo/` with:
 **Anthropic (required):**
 
 ```bash
+# macOS/Linux
 export ANTHROPIC_API_KEY="sk-ant-..."
+
+# Windows PowerShell
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
+# To persist across sessions:
+[Environment]::SetEnvironmentVariable("ANTHROPIC_API_KEY", "sk-ant-...", "User")
 ```
 
 Get yours at [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys).
@@ -159,6 +171,7 @@ meepo stop
 
 | Command | Description |
 |---------|-------------|
+| `meepo setup` | Interactive setup wizard (API keys, connection test) |
 | `meepo init` | Create `~/.meepo/` with default config |
 | `meepo start` | Start the agent daemon |
 | `meepo stop` | Stop a running daemon |
@@ -283,9 +296,23 @@ scripts\uninstall.ps1   # Remove
 **Build failures**
 - Ensure Rust is up to date: `rustup update`
 - Clean build: `cargo clean && cargo build --release`
+- Windows: Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with "Desktop development with C++"
 
 **"Permission denied" running scripts**
-- `chmod +x scripts/*.sh`
+- macOS/Linux: `chmod +x scripts/*.sh`
+- Windows: `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
+
+**Windows: Email/Calendar tools not working**
+- Outlook must be installed (uses COM automation)
+- Verify with PowerShell: `New-Object -ComObject Outlook.Application`
+- If using Windows Mail instead of Outlook, these tools won't work
+
+**Windows: API key not persisting across sessions**
+- PowerShell `$env:` variables are session-only. To persist:
+  ```powershell
+  [Environment]::SetEnvironmentVariable("ANTHROPIC_API_KEY", "sk-ant-...", "User")
+  ```
+- Then restart your terminal
 
 ## Project Structure
 

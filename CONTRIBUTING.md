@@ -2,13 +2,23 @@
 
 ## Prerequisites
 
-- **macOS** (required for AppleScript integrations and iMessage)
+### macOS
 - **Rust toolchain** — Install via [rustup](https://rustup.rs/):
   ```bash
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
   ```
-- **Optional CLIs** (for specific tools):
+- **Optional CLIs:**
   - `gh` — GitHub CLI (`brew install gh`)
+  - `claude` — Claude Code CLI (`npm install -g @anthropic-ai/claude-code`)
+
+### Windows
+- **Rust toolchain** — Install via [rustup](https://rustup.rs/). Download and run `rustup-init.exe`.
+- **Visual Studio Build Tools** — Required for C compilation (SQLite, etc.):
+  - Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+  - Select "Desktop development with C++" workload
+- **Microsoft Outlook** — Required for email/calendar tools (uses COM automation)
+- **Optional CLIs:**
+  - `gh` — GitHub CLI (`winget install GitHub.cli`)
   - `claude` — Claude Code CLI (`npm install -g @anthropic-ai/claude-code`)
 
 ## Getting Started
@@ -50,8 +60,8 @@ crates/
 │       ├── orchestrator.rs  # Sub-agent task orchestrator
 │       └── tools/      # All 25 tool implementations
 │           ├── mod.rs          # ToolHandler trait, ToolRegistry
-│           ├── macos.rs        # Mail, Calendar, Clipboard, Apps (6 tools)
-│           ├── accessibility.rs # Screen reader, click, type (3 tools)
+│           ├── macos.rs        # Mail, Calendar, Clipboard, Apps (cross-platform via platform layer)
+│           ├── accessibility.rs # Screen reader, click, type (cross-platform via platform layer)
 │           ├── code.rs         # write_code, make_pr, review_pr (3 tools)
 │           ├── search.rs       # web_search via Tavily (1 tool)
 │           ├── memory.rs       # Knowledge graph tools (4 tools)
@@ -64,7 +74,8 @@ crates/
 │       ├── lib.rs      # MessageBus, BusSender, MessageChannel trait
 │       ├── discord.rs  # Discord via Serenity WebSocket
 │       ├── slack.rs    # Slack via HTTP polling
-│       └── imessage.rs # iMessage via SQLite + AppleScript
+│       ├── imessage.rs # iMessage via SQLite + AppleScript (macOS only)
+│       └── email.rs    # Email via Mail.app polling (macOS only)
 │
 ├── meepo-knowledge/    # Persistence layer
 │   └── src/
@@ -93,6 +104,7 @@ crates/
 
 ## Running Locally
 
+**macOS/Linux:**
 ```bash
 # Initialize config (creates ~/.meepo/)
 cargo run -- init
@@ -106,6 +118,27 @@ cargo run -- --debug start
 # One-shot test (doesn't need daemon running)
 cargo run -- ask "Hello, what tools do you have?"
 ```
+
+**Windows (PowerShell):**
+```powershell
+# Initialize config (creates %USERPROFILE%\.meepo\)
+cargo run -- init
+
+# Set API key (session only)
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
+
+# Or use the run script (auto-builds, checks config)
+.\scripts\run.ps1
+
+# One-shot test
+cargo run -- ask "Hello, what tools do you have?"
+```
+
+**Windows interactive setup (recommended for first time):**
+```powershell
+.\scripts\setup.ps1
+```
+This builds the binary, initializes config, walks through API keys, and tests the connection.
 
 ## Adding a New Tool
 
