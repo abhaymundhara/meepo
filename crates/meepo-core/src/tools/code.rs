@@ -3,14 +3,44 @@
 use async_trait::async_trait;
 use serde_json::Value;
 use anyhow::{Result, Context};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
+use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
+use meepo_knowledge::KnowledgeDb;
 use super::{ToolHandler, json_schema};
+use super::autonomous::BackgroundTaskCommand;
+
+/// Configuration for Claude Code CLI tools, plumbed from [code] config section
+#[derive(Debug, Clone)]
+pub struct CodeToolConfig {
+    pub claude_code_path: String,
+    pub gh_path: String,
+    pub default_workspace: String,
+}
+
+impl Default for CodeToolConfig {
+    fn default() -> Self {
+        Self {
+            claude_code_path: "claude".to_string(),
+            gh_path: "gh".to_string(),
+            default_workspace: ".".to_string(),
+        }
+    }
+}
 
 /// Execute a coding task using Claude Code CLI
-pub struct WriteCodeTool;
+pub struct WriteCodeTool {
+    config: CodeToolConfig,
+}
+
+impl WriteCodeTool {
+    pub fn new(config: CodeToolConfig) -> Self {
+        Self { config }
+    }
+}
 
 #[async_trait]
 impl ToolHandler for WriteCodeTool {
@@ -44,7 +74,7 @@ impl ToolHandler for WriteCodeTool {
             .ok_or_else(|| anyhow::anyhow!("Missing 'task' parameter"))?;
         let workspace = input.get("workspace")
             .and_then(|v| v.as_str())
-            .unwrap_or(".");
+            .unwrap_or(&self.config.default_workspace);
 
         if task.len() > 50_000 {
             return Err(anyhow::anyhow!("Task description too long ({} chars, max 50,000)", task.len()));
@@ -54,8 +84,9 @@ impl ToolHandler for WriteCodeTool {
 
         let output = tokio::time::timeout(
             Duration::from_secs(300),
-            Command::new("claude")
+            Command::new(&self.config.claude_code_path)
                 .arg("--print")
+                .arg("--dangerously-skip-permissions")
                 .arg(task)
                 .current_dir(workspace)
                 .output()
@@ -76,7 +107,15 @@ impl ToolHandler for WriteCodeTool {
 }
 
 /// Create a PR using Claude Code CLI
-pub struct MakePrTool;
+pub struct MakePrTool {
+    config: CodeToolConfig,
+}
+
+impl MakePrTool {
+    pub fn new(config: CodeToolConfig) -> Self {
+        Self { config }
+    }
+}
 
 #[async_trait]
 impl ToolHandler for MakePrTool {
@@ -117,7 +156,7 @@ impl ToolHandler for MakePrTool {
         }
         let repo = input.get("repo")
             .and_then(|v| v.as_str())
-            .unwrap_or(".");
+            .unwrap_or(&self.config.default_workspace);
         let branch_name = input.get("branch_name")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
@@ -219,8 +258,9 @@ impl ToolHandler for MakePrTool {
         // Execute task with Claude Code
         let code_output = tokio::time::timeout(
             Duration::from_secs(300),
-            Command::new("claude")
+            Command::new(&self.config.claude_code_path)
                 .arg("--print")
+                .arg("--dangerously-skip-permissions")
                 .arg(task)
                 .current_dir(repo)
                 .output()
@@ -277,7 +317,7 @@ impl ToolHandler for MakePrTool {
         // Create PR using gh
         let pr_output = tokio::time::timeout(
             Duration::from_secs(60),
-            Command::new("gh")
+            Command::new(&self.config.gh_path)
                 .current_dir(repo)
                 .args([
                     "pr", "create",
@@ -302,9 +342,15 @@ impl ToolHandler for MakePrTool {
 }
 
 /// Review a pull request
-pub struct ReviewPrTool;
+pub struct ReviewPrTool {
+    config: CodeToolConfig,
+}
 
 impl ReviewPrTool {
+    pub fn new(config: CodeToolConfig) -> Self {
+        Self { config }
+    }
+
     /// Analyze a git diff and extract structured information
     fn analyze_diff(diff: &str) -> Result<DiffAnalysis> {
         let mut files_changed = 0;
@@ -471,7 +517,7 @@ impl ToolHandler for ReviewPrTool {
     async fn execute(&self, input: Value) -> Result<String> {
         let repo = input.get("repo")
             .and_then(|v| v.as_str())
-            .unwrap_or(".");
+            .unwrap_or(&self.config.default_workspace);
         let pr_number = input.get("pr_number")
             .and_then(|v| v.as_u64())
             .ok_or_else(|| anyhow::anyhow!("Missing 'pr_number' parameter"))?;
@@ -481,7 +527,7 @@ impl ToolHandler for ReviewPrTool {
         // Get PR details
         let pr_view = tokio::time::timeout(
             Duration::from_secs(60),
-            Command::new("gh")
+            Command::new(&self.config.gh_path)
                 .current_dir(repo)
                 .args(["pr", "view", &pr_number.to_string()])
                 .output()
@@ -499,7 +545,7 @@ impl ToolHandler for ReviewPrTool {
         // Get PR diff
         let pr_diff = tokio::time::timeout(
             Duration::from_secs(60),
-            Command::new("gh")
+            Command::new(&self.config.gh_path)
                 .current_dir(repo)
                 .args(["pr", "diff", &pr_number.to_string()])
                 .output()
@@ -542,6 +588,97 @@ impl ToolHandler for ReviewPrTool {
     }
 }
 
+/// Spawn a Claude Code CLI agent as a background task
+pub struct SpawnClaudeCodeTool {
+    config: CodeToolConfig,
+    db: Arc<KnowledgeDb>,
+    command_tx: mpsc::Sender<BackgroundTaskCommand>,
+}
+
+impl SpawnClaudeCodeTool {
+    pub fn new(
+        config: CodeToolConfig,
+        db: Arc<KnowledgeDb>,
+        command_tx: mpsc::Sender<BackgroundTaskCommand>,
+    ) -> Self {
+        Self { config, db, command_tx }
+    }
+}
+
+#[async_trait]
+impl ToolHandler for SpawnClaudeCodeTool {
+    fn name(&self) -> &str {
+        "spawn_claude_code"
+    }
+
+    fn description(&self) -> &str {
+        "Spawn a Claude Code CLI agent as a background task to work on coding tasks autonomously. \
+         The agent runs in its own process and results are reported when done. \
+         Use this for longer coding tasks that shouldn't block the conversation."
+    }
+
+    fn input_schema(&self) -> Value {
+        json_schema(
+            serde_json::json!({
+                "task": {
+                    "type": "string",
+                    "description": "Description of the coding task for Claude Code to execute"
+                },
+                "workspace": {
+                    "type": "string",
+                    "description": "Path to the workspace directory (default: configured default_workspace)"
+                },
+                "reply_channel": {
+                    "type": "string",
+                    "description": "Channel to report results to (e.g., 'discord', 'slack'). Defaults to 'internal'."
+                }
+            }),
+            vec!["task"],
+        )
+    }
+
+    async fn execute(&self, input: Value) -> Result<String> {
+        let task = input.get("task")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'task' parameter"))?;
+        let workspace = input.get("workspace")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&self.config.default_workspace);
+        let reply_channel = input.get("reply_channel")
+            .and_then(|v| v.as_str())
+            .unwrap_or("internal");
+
+        if task.len() > 50_000 {
+            return Err(anyhow::anyhow!("Task description too long ({} chars, max 50,000)", task.len()));
+        }
+
+        let task_id = format!("t-{}", uuid::Uuid::new_v4());
+        let description = format!("Claude Code: {}", &task[..task.len().min(100)]);
+
+        debug!("Spawning Claude Code background task {}: {}", task_id, description);
+
+        // Store in database
+        self.db.insert_background_task(&task_id, &description, reply_channel, "agent").await
+            .context("Failed to create background task in database")?;
+
+        // Send spawn command to main loop
+        self.command_tx.send(BackgroundTaskCommand::SpawnClaudeCode {
+            id: task_id.clone(),
+            task: task.to_string(),
+            workspace: workspace.to_string(),
+            reply_channel: reply_channel.to_string(),
+        })
+        .await
+        .context("Failed to send background task command")?;
+
+        Ok(format!(
+            "Spawned Claude Code agent [{}] in workspace '{}'. \
+             It will run in the background and report results to '{}'.",
+            task_id, workspace, reply_channel
+        ))
+    }
+}
+
 /// Analysis result from parsing a git diff
 struct DiffAnalysis {
     files_changed: usize,
@@ -557,9 +694,13 @@ mod tests {
     use super::*;
     use crate::tools::ToolHandler;
 
+    fn test_config() -> CodeToolConfig {
+        CodeToolConfig::default()
+    }
+
     #[test]
     fn test_write_code_schema() {
-        let tool = WriteCodeTool;
+        let tool = WriteCodeTool::new(test_config());
         assert_eq!(tool.name(), "write_code");
         assert!(!tool.description().is_empty());
         let schema = tool.input_schema();
@@ -568,7 +709,7 @@ mod tests {
 
     #[test]
     fn test_make_pr_schema() {
-        let tool = MakePrTool;
+        let tool = MakePrTool::new(test_config());
         assert_eq!(tool.name(), "make_pr");
         let schema = tool.input_schema();
         let required: Vec<String> = serde_json::from_value(
@@ -579,7 +720,7 @@ mod tests {
 
     #[test]
     fn test_review_pr_schema() {
-        let tool = ReviewPrTool;
+        let tool = ReviewPrTool::new(test_config());
         assert_eq!(tool.name(), "review_pr");
         let schema = tool.input_schema();
         assert!(schema.get("properties").is_some());
@@ -587,21 +728,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_code_missing_task() {
-        let tool = WriteCodeTool;
+        let tool = WriteCodeTool::new(test_config());
         let result = tool.execute(serde_json::json!({})).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_make_pr_missing_task() {
-        let tool = MakePrTool;
+        let tool = MakePrTool::new(test_config());
         let result = tool.execute(serde_json::json!({})).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_review_pr_missing_params() {
-        let tool = ReviewPrTool;
+        let tool = ReviewPrTool::new(test_config());
         let result = tool.execute(serde_json::json!({})).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("pr_number"));
@@ -609,7 +750,7 @@ mod tests {
 
     #[test]
     fn test_review_pr_schema_validation() {
-        let tool = ReviewPrTool;
+        let tool = ReviewPrTool::new(test_config());
         assert_eq!(tool.name(), "review_pr");
 
         let schema = tool.input_schema();

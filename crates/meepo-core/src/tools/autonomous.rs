@@ -18,6 +18,12 @@ pub enum BackgroundTaskCommand {
         description: String,
         reply_channel: String,
     },
+    SpawnClaudeCode {
+        id: String,
+        task: String,
+        workspace: String,
+        reply_channel: String,
+    },
     Cancel {
         id: String,
     },

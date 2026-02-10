@@ -384,9 +384,17 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
         registry.register(Arc::new(meepo_core::tools::macos::MusicControlTool::new()));
         registry.register(Arc::new(meepo_core::tools::macos::SearchContactsTool::new()));
     }
-    registry.register(Arc::new(meepo_core::tools::code::WriteCodeTool));
-    registry.register(Arc::new(meepo_core::tools::code::MakePrTool));
-    registry.register(Arc::new(meepo_core::tools::code::ReviewPrTool));
+    let code_config = meepo_core::tools::code::CodeToolConfig {
+        claude_code_path: shellexpand_str(&cfg.code.claude_code_path),
+        gh_path: shellexpand_str(&cfg.code.gh_path),
+        default_workspace: shellexpand_str(&cfg.code.default_workspace),
+    };
+    registry.register(Arc::new(meepo_core::tools::code::WriteCodeTool::new(code_config.clone())));
+    registry.register(Arc::new(meepo_core::tools::code::MakePrTool::new(code_config.clone())));
+    registry.register(Arc::new(meepo_core::tools::code::ReviewPrTool::new(code_config.clone())));
+    registry.register(Arc::new(meepo_core::tools::code::SpawnClaudeCodeTool::new(
+        code_config.clone(), db.clone(), bg_task_tx.clone(),
+    )));
     registry.register(Arc::new(meepo_core::tools::memory::RememberTool::new(db.clone())));
     registry.register(Arc::new(meepo_core::tools::memory::RecallTool::new(db.clone())));
     // Use KnowledgeGraph for SearchKnowledgeTool to enable Tantivy full-text search
@@ -781,6 +789,11 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
     let agent_bg = agent.clone();
     let db_bg = db.clone();
     let bus_sender_bg = bus_sender_for_bg;
+    let code_config_bg = meepo_core::tools::code::CodeToolConfig {
+        claude_code_path: shellexpand_str(&cfg.code.claude_code_path),
+        gh_path: shellexpand_str(&cfg.code.gh_path),
+        default_workspace: shellexpand_str(&cfg.code.default_workspace),
+    };
     let bg_task_handler = tokio::spawn(async move {
         // Track cancellation tokens for background tasks
         let task_cancels = Arc::new(tokio::sync::Mutex::new(
@@ -860,6 +873,122 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
 
                                 // Clean up cancellation token
                                 task_cancels.lock().await.remove(&id_clone);
+                            });
+                        }
+                        Some(meepo_core::tools::autonomous::BackgroundTaskCommand::SpawnClaudeCode { id, task, workspace, reply_channel }) => {
+                            info!("Spawning Claude Code agent [{}] in {}", id, workspace);
+                            let task_cancel = tokio_util::sync::CancellationToken::new();
+                            task_cancels.lock().await.insert(id.clone(), task_cancel.clone());
+
+                            let db = db_bg.clone();
+                            let bus = bus_sender_bg.clone();
+                            let task_cancels = task_cancels.clone();
+                            let claude_path = code_config_bg.claude_code_path.clone();
+
+                            tokio::spawn(async move {
+                                // Update status to running
+                                if let Err(e) = db.update_background_task(&id, "running", None).await {
+                                    error!("Failed to update task {} to running: {}", id, e);
+                                }
+
+                                // Spawn Claude Code CLI as a child process
+                                let mut child = match tokio::process::Command::new(&claude_path)
+                                    .arg("--print")
+                                    .arg("--dangerously-skip-permissions")
+                                    .arg(&task)
+                                    .current_dir(&workspace)
+                                    .stdout(std::process::Stdio::piped())
+                                    .stderr(std::process::Stdio::piped())
+                                    .spawn()
+                                {
+                                    Ok(child) => child,
+                                    Err(e) => {
+                                        let err_msg = format!("Failed to spawn Claude Code CLI: {}", e);
+                                        error!("{}", err_msg);
+                                        let _ = db.update_background_task(&id, "failed", Some(&err_msg)).await;
+                                        let notify = meepo_core::types::OutgoingMessage {
+                                            content: format!("Claude Code task [{}] failed: {}", id, err_msg),
+                                            channel: meepo_core::types::ChannelType::from_string(&reply_channel),
+                                            reply_to: None,
+                                            kind: meepo_core::types::MessageKind::Response,
+                                        };
+                                        let _ = bus.send(notify).await;
+                                        task_cancels.lock().await.remove(&id);
+                                        return;
+                                    }
+                                };
+
+                                // Wait for child with cancellation support
+                                let result = tokio::select! {
+                                    _ = task_cancel.cancelled() => {
+                                        let _ = child.kill().await;
+                                        Err(anyhow::anyhow!("Task cancelled"))
+                                    }
+                                    status = child.wait() => {
+                                        match status {
+                                            Ok(exit) if exit.success() => {
+                                                // Read stdout after process exits
+                                                let mut stdout_buf = Vec::new();
+                                                if let Some(mut stdout) = child.stdout.take() {
+                                                    use tokio::io::AsyncReadExt;
+                                                    let _ = stdout.read_to_end(&mut stdout_buf).await;
+                                                }
+                                                let stdout = String::from_utf8_lossy(&stdout_buf);
+                                                // Truncate to 10K chars for DB storage
+                                                let result = if stdout.len() > 10_000 {
+                                                    format!("{}...\n[truncated, {} total chars]", &stdout[..10_000], stdout.len())
+                                                } else {
+                                                    stdout.to_string()
+                                                };
+                                                Ok(result)
+                                            }
+                                            Ok(exit) => {
+                                                let mut stderr_buf = Vec::new();
+                                                if let Some(mut stderr) = child.stderr.take() {
+                                                    use tokio::io::AsyncReadExt;
+                                                    let _ = stderr.read_to_end(&mut stderr_buf).await;
+                                                }
+                                                let stderr = String::from_utf8_lossy(&stderr_buf);
+                                                Err(anyhow::anyhow!("Claude Code exited with {}: {}", exit, stderr))
+                                            }
+                                            Err(e) => Err(anyhow::anyhow!("Failed to wait for Claude Code: {}", e)),
+                                        }
+                                    }
+                                };
+
+                                match result {
+                                    Ok(output) => {
+                                        if let Err(e) = db.update_background_task(&id, "completed", Some(&output)).await {
+                                            error!("Failed to update task {} to completed: {}", id, e);
+                                        }
+                                        let notify = meepo_core::types::OutgoingMessage {
+                                            content: format!("Claude Code task [{}] completed:\n{}", id, output),
+                                            channel: meepo_core::types::ChannelType::from_string(&reply_channel),
+                                            reply_to: None,
+                                            kind: meepo_core::types::MessageKind::Response,
+                                        };
+                                        let _ = bus.send(notify).await;
+                                    }
+                                    Err(e) => {
+                                        let err_msg = e.to_string();
+                                        let status = if err_msg.contains("cancelled") { "cancelled" } else { "failed" };
+                                        if let Err(e) = db.update_background_task(&id, status, Some(&err_msg)).await {
+                                            error!("Failed to update task {} to {}: {}", id, status, e);
+                                        }
+                                        if status == "failed" {
+                                            let notify = meepo_core::types::OutgoingMessage {
+                                                content: format!("Claude Code task [{}] failed: {}", id, err_msg),
+                                                channel: meepo_core::types::ChannelType::from_string(&reply_channel),
+                                                reply_to: None,
+                                                kind: meepo_core::types::MessageKind::Response,
+                                            };
+                                            let _ = bus.send(notify).await;
+                                        }
+                                    }
+                                }
+
+                                // Clean up cancellation token
+                                task_cancels.lock().await.remove(&id);
                             });
                         }
                         Some(meepo_core::tools::autonomous::BackgroundTaskCommand::Cancel { id }) => {
@@ -1099,9 +1228,14 @@ async fn cmd_mcp_server(config_path: &Option<PathBuf>) -> Result<()> {
         registry.register(Arc::new(meepo_core::tools::macos::MusicControlTool::new()));
         registry.register(Arc::new(meepo_core::tools::macos::SearchContactsTool::new()));
     }
-    registry.register(Arc::new(meepo_core::tools::code::WriteCodeTool));
-    registry.register(Arc::new(meepo_core::tools::code::MakePrTool));
-    registry.register(Arc::new(meepo_core::tools::code::ReviewPrTool));
+    let code_config = meepo_core::tools::code::CodeToolConfig {
+        claude_code_path: shellexpand_str(&cfg.code.claude_code_path),
+        gh_path: shellexpand_str(&cfg.code.gh_path),
+        default_workspace: shellexpand_str(&cfg.code.default_workspace),
+    };
+    registry.register(Arc::new(meepo_core::tools::code::WriteCodeTool::new(code_config.clone())));
+    registry.register(Arc::new(meepo_core::tools::code::MakePrTool::new(code_config.clone())));
+    registry.register(Arc::new(meepo_core::tools::code::ReviewPrTool::new(code_config)));
     registry.register(Arc::new(meepo_core::tools::memory::RememberTool::new(db.clone())));
     registry.register(Arc::new(meepo_core::tools::memory::RecallTool::new(db.clone())));
     registry.register(Arc::new(meepo_core::tools::memory::SearchKnowledgeTool::with_graph(knowledge_graph.clone())));
@@ -1125,7 +1259,6 @@ async fn cmd_mcp_server(config_path: &Option<PathBuf>) -> Result<()> {
     registry.register(Arc::new(meepo_core::tools::watchers::ListWatchersTool::new(db.clone())));
     registry.register(Arc::new(meepo_core::tools::watchers::CancelWatcherTool::new(db.clone(), watcher_command_tx.clone())));
     // Autonomous tools — agent_status works in MCP mode, spawn/stop won't have handlers
-    let (_bg_task_tx_mcp, _) = tokio::sync::mpsc::channel::<meepo_core::tools::autonomous::BackgroundTaskCommand>(1);
     registry.register(Arc::new(meepo_core::tools::autonomous::AgentStatusTool::new(db.clone())));
 
     // Load skills if enabled

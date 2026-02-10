@@ -116,9 +116,10 @@ active_hours = { start = "08:00", end = "23:00" }
 # Optional: brew install gh  |  npm i -g @anthropic-ai/claude-code
 
 [code]
-claude_code_path = "claude"
-gh_path = "gh"
-default_workspace = "~/Coding"
+claude_code_path = "claude"    # Path to Claude Code CLI binary
+gh_path = "gh"                 # Path to GitHub CLI binary
+default_workspace = "~/Coding" # Default workspace for code tasks
+# Note: spawn_claude_code runs with --dangerously-skip-permissions (daemon mode has no TTY)
 
 
 # ── Memory / Workspace ──────────────────────────────────────────
