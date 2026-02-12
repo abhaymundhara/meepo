@@ -419,6 +419,10 @@ meepo/
 ├── docs/
 │   └── architecture.md   # Detailed architecture with Mermaid diagrams
 ├── CONTRIBUTING.md        # Developer setup and contribution guide
+├── CODE_OF_CONDUCT.md     # Community guidelines
+├── SECURITY.md            # Vulnerability reporting policy
+├── CHANGELOG.md           # Release history
+├── LICENSE                # MIT license
 ├── SOUL.md               # Agent personality template
 └── MEMORY.md             # Agent memory template
 ```
@@ -427,6 +431,12 @@ meepo/
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, and contribution guidelines.
 
+Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
+
+## Security
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md). **Do not open a public issue for security vulnerabilities.**
+
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE) for details.
