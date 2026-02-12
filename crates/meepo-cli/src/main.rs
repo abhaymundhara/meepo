@@ -1868,8 +1868,9 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
     if cfg.a2a.enabled {
         let a2a_card = meepo_a2a::AgentCard {
             name: "meepo".to_string(),
-            description: "Personal AI agent with macOS integration, code tools, and web search"
-                .to_string(),
+            description:
+                "Personal AI agent with macOS and Windows integration, code tools, and web search"
+                    .to_string(),
             url: format!("http://localhost:{}", cfg.a2a.port),
             capabilities: vec![
                 "file_operations".to_string(),

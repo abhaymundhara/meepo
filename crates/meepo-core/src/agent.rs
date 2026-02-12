@@ -6,6 +6,10 @@ use tracing::{debug, info};
 
 use crate::api::ApiClient;
 use crate::context::build_system_prompt;
+use crate::middleware::MiddlewareChain;
+use crate::query_router::{self, QueryRouterConfig, RetrievalStrategy};
+use crate::summarization::{self, SummarizationConfig};
+use crate::tool_selector::{self, ToolSelectorConfig};
 use crate::tools::{ToolExecutor, ToolRegistry};
 use crate::types::{IncomingMessage, MessageKind, OutgoingMessage};
 
@@ -21,6 +25,14 @@ pub struct Agent {
     soul: String,
     memory: String,
     db: Arc<KnowledgeDb>,
+    /// Middleware chain for pre/post processing
+    middleware: MiddlewareChain,
+    /// Query routing configuration
+    router_config: QueryRouterConfig,
+    /// Conversation summarization configuration
+    summarization_config: SummarizationConfig,
+    /// Tool selection configuration
+    tool_selector_config: ToolSelectorConfig,
 }
 
 impl Agent {
@@ -38,7 +50,35 @@ impl Agent {
             soul,
             memory,
             db,
+            middleware: MiddlewareChain::new(),
+            router_config: QueryRouterConfig::default(),
+            summarization_config: SummarizationConfig::default(),
+            tool_selector_config: ToolSelectorConfig::default(),
         }
+    }
+
+    /// Set the middleware chain
+    pub fn with_middleware(mut self, middleware: MiddlewareChain) -> Self {
+        self.middleware = middleware;
+        self
+    }
+
+    /// Set the query router configuration
+    pub fn with_router_config(mut self, config: QueryRouterConfig) -> Self {
+        self.router_config = config;
+        self
+    }
+
+    /// Set the summarization configuration
+    pub fn with_summarization_config(mut self, config: SummarizationConfig) -> Self {
+        self.summarization_config = config;
+        self
+    }
+
+    /// Set the tool selector configuration
+    pub fn with_tool_selector_config(mut self, config: ToolSelectorConfig) -> Self {
+        self.tool_selector_config = config;
+        self
     }
 
     /// Handle an incoming message and generate a response
@@ -54,14 +94,41 @@ impl Agent {
             .await
             .context("Failed to store conversation")?;
 
-        // Load relevant context from knowledge graph
-        let context = self.load_context(&msg).await?;
+        // Route the query to determine retrieval strategy
+        let strategy =
+            query_router::route_query(&msg.content, Some(&self.api), &self.router_config)
+                .await
+                .unwrap_or_else(|e| {
+                    debug!("Query routing failed, using default strategy: {}", e);
+                    RetrievalStrategy {
+                        complexity: query_router::QueryComplexity::SingleStep,
+                        search_knowledge: true,
+                        search_web: false,
+                        load_history: true,
+                        graph_expand: false,
+                        corrective_rag: false,
+                        knowledge_limit: 5,
+                    }
+                });
+
+        debug!("Query routed as {:?}", strategy.complexity);
+
+        // Load relevant context from knowledge graph (guided by strategy)
+        let context = self.load_context(&msg, &strategy).await?;
 
         // Build system prompt
         let system_prompt = build_system_prompt(&self.soul, &self.memory, &context);
 
-        // Get tool definitions
-        let tool_definitions = self.tools.list_tools();
+        // Get tool definitions (with optional LLM selection)
+        let all_tools = self.tools.list_tools();
+        let tool_definitions = tool_selector::select_tools(
+            &self.api,
+            &msg.content,
+            &all_tools,
+            &self.tool_selector_config,
+        )
+        .await
+        .unwrap_or(all_tools);
 
         debug!(
             "Using {} tools for this interaction",
@@ -101,32 +168,60 @@ impl Agent {
     /// Context is capped at [`MAX_CONTEXT_SIZE`] bytes to prevent multi-MB
     /// strings from being sent to the LLM API. Each major section checks the
     /// limit and stops early when exceeded.
-    async fn load_context(&self, msg: &IncomingMessage) -> Result<String> {
+    async fn load_context(
+        &self,
+        msg: &IncomingMessage,
+        strategy: &RetrievalStrategy,
+    ) -> Result<String> {
         let mut context = String::new();
         let mut truncated = false;
 
-        // Add recent conversation history from this channel
-        let recent = self
-            .db
-            .get_recent_conversations(Some(&msg.channel.to_string()), 10)
-            .await
-            .context("Failed to load recent conversations")?;
+        // Add recent conversation history from this channel (with summarization)
+        if strategy.load_history {
+            let recent = self
+                .db
+                .get_recent_conversations(Some(&msg.channel.to_string()), 30)
+                .await
+                .context("Failed to load recent conversations")?;
 
-        if !recent.is_empty() {
-            context.push_str("## Recent Conversation\n\n");
-            for conv in recent.iter().rev() {
-                context.push_str(&format!("{}: {}\n", conv.sender, conv.content));
-                if context.len() > MAX_CONTEXT_SIZE {
-                    truncated = true;
-                    break;
+            if !recent.is_empty() {
+                // Convert to (sender, content) pairs for summarization
+                let conv_pairs: Vec<(String, String)> = recent
+                    .iter()
+                    .rev()
+                    .map(|c| (c.sender.clone(), c.content.clone()))
+                    .collect();
+
+                // Try summarization for long histories
+                match summarization::build_summarized_context(
+                    &self.api,
+                    &conv_pairs,
+                    &self.summarization_config,
+                )
+                .await
+                {
+                    Ok(summarized) => {
+                        context.push_str(&summarized);
+                    }
+                    Err(e) => {
+                        // Fall back to raw history on summarization failure
+                        debug!("Summarization failed, using raw history: {}", e);
+                        context.push_str("## Recent Conversation\n\n");
+                        for (sender, content) in conv_pairs.iter().take(10) {
+                            context.push_str(&format!("{}: {}\n", sender, content));
+                            if context.len() > MAX_CONTEXT_SIZE {
+                                truncated = true;
+                                break;
+                            }
+                        }
+                        context.push('\n');
+                    }
                 }
             }
-            context.push('\n');
         }
 
         // Search for relevant entities mentioned in the message
-        // Simple keyword extraction - split on whitespace and search each word
-        if !truncated {
+        if !truncated && strategy.search_knowledge {
             let keywords: Vec<&str> = msg
                 .content
                 .split_whitespace()
@@ -145,7 +240,7 @@ impl Agent {
                     }
 
                     if let Ok(entities) = self.db.search_entities(keyword, None).await {
-                        for entity in entities.iter().take(3) {
+                        for entity in entities.iter().take(strategy.knowledge_limit.min(3)) {
                             context
                                 .push_str(&format!("- {} ({})", entity.name, entity.entity_type));
                             if let Some(metadata) = &entity.metadata {
@@ -254,7 +349,16 @@ mod tests {
             timestamp: Utc::now(),
         };
 
-        let context = agent.load_context(&msg).await.unwrap();
+        let strategy = RetrievalStrategy {
+            complexity: query_router::QueryComplexity::SingleStep,
+            search_knowledge: true,
+            search_web: false,
+            load_history: true,
+            graph_expand: false,
+            corrective_rag: false,
+            knowledge_limit: 5,
+        };
+        let context = agent.load_context(&msg, &strategy).await.unwrap();
         // Context is a String — load_context should succeed without panic
         assert!(context.len() <= 100_000, "Context unexpectedly large");
     }

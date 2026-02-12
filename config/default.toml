@@ -104,6 +104,54 @@ db_path = "~/.meepo/knowledge.db"
 tantivy_path = "~/.meepo/tantivy_index"
 
 
+# ── RAG Features ────────────────────────────────────────────────
+# Advanced retrieval-augmented generation capabilities.
+
+# Conversation summarization — automatically summarizes older history
+# when approaching context window limits.
+[rag.summarization]
+enabled = true
+trigger_chars = 60000                   # summarize when context exceeds this
+keep_recent = 10                        # always keep this many recent messages verbatim
+
+# Query routing — classifies queries and selects retrieval strategy.
+[rag.query_router]
+enabled = true
+use_llm_classification = false          # use heuristics (fast/free) by default
+
+# Tool selection — dynamically selects relevant tools per query.
+[rag.tool_selector]
+enabled = true
+max_tools = 15                          # max tools to pass to the model
+activation_threshold = 20               # only activate when this many tools registered
+
+# GraphRAG — relationship-aware retrieval via knowledge graph traversal.
+[rag.graph_rag]
+max_hops = 2                            # max relationship hops to traverse
+max_expanded_results = 20               # max entities after expansion
+hop_decay = 0.5                         # score decay per hop
+
+# Corrective RAG — validates retrieval relevance and refines queries.
+[rag.corrective]
+enabled = false                         # opt-in (adds latency)
+max_rounds = 2                          # max correction rounds
+relevance_threshold = 0.5               # min ratio of relevant docs
+
+# Vector embeddings — semantic search via local embedding model.
+# Requires fastembed-rs (not yet integrated as a dependency).
+[rag.embeddings]
+enabled = false                         # disabled until fastembed is added
+model_name = "sentence-transformers/all-MiniLM-L6-v2"
+dimensions = 384
+vector_weight = 0.5                     # weight in hybrid search
+keyword_weight = 0.5                    # weight in hybrid search
+
+# Document chunking — how documents are split for ingestion.
+[rag.chunking]
+chunk_size = 1000                       # target chunk size in characters
+chunk_overlap = 200                     # overlap between consecutive chunks
+
+
 # ── Watchers ─────────────────────────────────────────────────────
 
 [watchers]

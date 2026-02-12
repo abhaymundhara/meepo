@@ -17,6 +17,7 @@ pub mod delegate;
 pub mod filesystem;
 pub mod macos;
 pub mod memory;
+pub mod rag;
 pub mod search;
 pub mod system;
 pub mod watchers;

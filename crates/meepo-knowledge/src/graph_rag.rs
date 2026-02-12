@@ -4,10 +4,10 @@
 //! relationships to pull in contextually connected entities. Combines
 //! keyword/vector search results with graph traversal for richer context.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::sqlite::{Entity, KnowledgeDb, Relationship};
 
@@ -267,10 +267,7 @@ mod tests {
         let db = KnowledgeDb::new(&temp.path().join("test.db")).unwrap();
 
         // Create entities
-        let id_a = db
-            .insert_entity("Rust", "language", None)
-            .await
-            .unwrap();
+        let id_a = db.insert_entity("Rust", "language", None).await.unwrap();
         let id_b = db
             .insert_entity("Systems Programming", "domain", None)
             .await

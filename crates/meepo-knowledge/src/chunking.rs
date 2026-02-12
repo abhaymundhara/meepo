@@ -4,9 +4,8 @@
 //! graph. Supports recursive character splitting with configurable chunk
 //! size and overlap.
 
-use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::debug;
 
 /// Configuration for document chunking
 #[derive(Debug, Clone)]
@@ -201,7 +200,8 @@ fn merge_with_overlap(chunks: &[String], max_size: usize, overlap: usize) -> Vec
                 result.push(merged);
             } else {
                 // If merged is too large, just use the chunk with truncated overlap
-                let truncated_overlap = &overlap_text[overlap_text.len().saturating_sub(overlap / 2)..];
+                let truncated_overlap =
+                    &overlap_text[overlap_text.len().saturating_sub(overlap / 2)..];
                 result.push(format!("{}{}", truncated_overlap, chunk));
             }
         }
@@ -269,7 +269,12 @@ mod tests {
 
         // Create a text with clear paragraph boundaries
         let text = (0..10)
-            .map(|i| format!("This is paragraph {}. It contains some text about topic {}.", i, i))
+            .map(|i| {
+                format!(
+                    "This is paragraph {}. It contains some text about topic {}.",
+                    i, i
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n\n");
 

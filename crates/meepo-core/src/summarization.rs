@@ -63,10 +63,15 @@ pub async fn summarize_conversations(
         .sum();
 
     // Check if summarization is needed
-    if !config.enabled || total_chars < config.trigger_chars || conversations.len() <= config.keep_recent {
+    if !config.enabled
+        || total_chars < config.trigger_chars
+        || conversations.len() <= config.keep_recent
+    {
         debug!(
             "Summarization not needed (total_chars={}, threshold={}, count={})",
-            total_chars, config.trigger_chars, conversations.len()
+            total_chars,
+            config.trigger_chars,
+            conversations.len()
         );
         return Ok(SummarizationResult {
             summary: None,
@@ -169,9 +174,7 @@ pub async fn build_summarized_context(
     }
 
     // Add recent messages verbatim
-    let keep_start = conversations
-        .len()
-        .saturating_sub(config.keep_recent);
+    let keep_start = conversations.len().saturating_sub(config.keep_recent);
     let recent = &conversations[keep_start..];
 
     if !recent.is_empty() {

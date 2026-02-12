@@ -670,6 +670,52 @@ Skills are OpenClaw-compatible SKILL.md files that extend Meepo with additional 
 
 Each SKILL.md has YAML frontmatter defining `name`, `description`, and optional `inputs`. The `SkillToolHandler` wraps each parsed skill as a `ToolHandler` and registers it in the `ToolRegistry` at startup. Invalid skills are skipped with a warning.
 
+## Setup Wizard
+
+The `meepo setup` command (`cmd_setup()` in `meepo-cli`) provides a comprehensive interactive wizard that walks users through the entire first-time setup process. On macOS it runs 7 steps; on other platforms, 5.
+
+```mermaid
+graph TD
+    subgraph Wizard["meepo setup (7 steps on macOS)"]
+        S1["Step 1: Init Config"]
+        S2["Step 2: Anthropic API Key"]
+        S3["Step 3: Tavily API Key (optional)"]
+        S4["Step 4: macOS Permissions"]
+        S5["Step 5: Feature Selection"]
+        S6["Step 6: Verify API Connection"]
+        S7["Step 7: Summary"]
+    end
+
+    subgraph Permissions["Step 4: macOS Permissions"]
+        P4a["4a: Accessibility"]
+        P4b["4b: Full Disk Access"]
+        P4c["4c: Automation"]
+        P4d["4d: Screen Recording"]
+    end
+
+    subgraph Features["Step 5: Feature Selection"]
+        F1["iMessage channel"]
+        F2["Email channel"]
+        F3["Browser automation"]
+        F4["Notifications"]
+    end
+
+    S1 --> S2 --> S3 --> S4
+    S4 --> P4a --> P4b --> P4c --> P4d
+    P4d --> S5
+    S5 --> F1 & F2 & F3 & F4
+    F4 --> S6 --> S7
+```
+
+**Key implementation details:**
+
+- **Terminal detection** — `detect_terminal_app()` reads `TERM_PROGRAM` env var to identify the user's terminal (iTerm, Warp, Ghostty, VS Code, Windsurf, Cursor, etc.) and uses the display name in permission instructions
+- **Permission detection** — `check_accessibility()` tests via `osascript` System Events command; `check_full_disk_access()` tries opening `~/Library/Messages/chat.db`
+- **System Settings deep links** — Opens the exact Privacy & Security pane via `open x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility` (and `Privacy_AllFiles`, `Privacy_Automation`, `Privacy_ScreenCapture`)
+- **Config editing** — `update_config_value()` and `update_config_array()` perform in-place TOML edits (find section header, replace matching key line) so the setup wizard can enable features without requiring the user to manually edit config
+- **Skip support** — Each permission step allows pressing 's' to skip, with a warning about which tools won't work
+- **Platform gating** — macOS permission steps and macOS-only features (iMessage, email channel, browser) are behind `#[cfg(target_os = "macos")]`
+
 ## Template System
 
 Agent templates allow swapping personalities, goals, and config overlays. A template is a `template.toml` file with metadata, goals, and a TOML config overlay.

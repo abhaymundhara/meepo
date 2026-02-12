@@ -288,7 +288,6 @@ impl AutonomousLoop {
 mod tests {
     use super::*;
     use crate::api::ApiClient;
-    use crate::notifications::NotifyConfig;
     use crate::tools::ToolRegistry;
     use tempfile::TempDir;
 

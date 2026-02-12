@@ -6,7 +6,7 @@
 //! Based on Corrective RAG (Yan et al., 2024).
 
 use anyhow::{Context, Result};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::api::{ApiClient, ApiMessage, ContentBlock, MessageContent};
 
@@ -200,7 +200,10 @@ async fn assess_relevance(
     for line in text.lines() {
         let line = line.trim();
         if let Some((num_str, assessment)) = line.split_once(':') {
-            let num_str = num_str.trim().trim_start_matches('[').trim_start_matches("DOC ");
+            let num_str = num_str
+                .trim()
+                .trim_start_matches('[')
+                .trim_start_matches("DOC ");
             if let Ok(idx) = num_str.parse::<usize>() {
                 let idx = idx.saturating_sub(1); // 1-indexed to 0-indexed
                 if idx < assessed.len() {
@@ -312,10 +315,12 @@ mod tests {
         assert_eq!(result.rounds, 0);
         assert!(result.success);
         assert!(result.refined_query.is_none());
-        assert!(result
-            .documents
-            .iter()
-            .all(|d| d.relevance == Relevance::Relevant));
+        assert!(
+            result
+                .documents
+                .iter()
+                .all(|d| d.relevance == Relevance::Relevant)
+        );
     }
 
     #[tokio::test]

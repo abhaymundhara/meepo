@@ -147,7 +147,14 @@ crates/
 
 ## Running Locally
 
-**macOS/Linux:**
+**First-time setup (recommended):**
+```bash
+# Build and run the interactive setup wizard
+cargo run -- setup
+```
+This walks you through API keys, macOS permissions (Accessibility, Full Disk Access, Automation, Screen Recording), feature selection, and verifies the API connection. It opens System Settings panes for you and detects your terminal app automatically.
+
+**macOS/Linux (manual):**
 ```bash
 # Initialize config (creates ~/.meepo/)
 cargo run -- init

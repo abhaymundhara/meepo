@@ -6,13 +6,26 @@
 //! - Knowledge graph operations combining both
 //! - MEMORY.md synchronization
 
+pub mod chunking;
+pub mod embeddings;
 pub mod graph;
+pub mod graph_rag;
 pub mod memory_sync;
 pub mod sqlite;
 pub mod tantivy;
 
 // Re-export main types
+pub use chunking::{
+    ChunkingConfig, DocumentChunk, DocumentMetadata, chunk_text, detect_content_type,
+};
+pub use embeddings::{
+    EmbeddingConfig, EmbeddingProvider, HybridSearchResult, NoOpEmbeddingProvider, VectorIndex,
+    VectorSearchResult, hybrid_search_rrf,
+};
 pub use graph::KnowledgeGraph;
+pub use graph_rag::{
+    EntitySource, GraphRagConfig, ScoredEntity, format_graph_context, graph_expand,
+};
 pub use memory_sync::{load_memory, load_soul, save_memory};
 pub use sqlite::{
     ActionLogEntry, BackgroundTask, Conversation, Entity, Goal, KnowledgeDb, Relationship,

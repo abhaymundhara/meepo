@@ -6,15 +6,19 @@
 use crate::watcher::{Watcher, WatcherEvent, WatcherKind};
 use anyhow::{Context, Result};
 use chrono::{NaiveTime, Utc};
+#[cfg(target_os = "macos")]
 use lru::LruCache;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher};
 use std::collections::HashMap;
+#[cfg(target_os = "macos")]
 use std::hash::{Hash, Hasher};
+#[cfg(target_os = "macos")]
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+#[cfg(target_os = "macos")]
 use tokio::process::Command;
 use tokio::sync::{RwLock, mpsc};
 use tokio::time::{Instant, sleep_until};
@@ -533,6 +537,7 @@ impl WatcherRunner {
 /// State maintained across poll cycles for dedup
 struct PollState {
     /// Hashes of previously seen items (emails, calendar events) - bounded LRU cache
+    #[cfg(target_os = "macos")]
     seen_hashes: LruCache<u64, ()>,
     /// Last GitHub event ID seen
     last_github_event_id: Option<String>,
@@ -541,11 +546,13 @@ struct PollState {
 impl PollState {
     fn new() -> Self {
         Self {
+            #[cfg(target_os = "macos")]
             seen_hashes: LruCache::new(NonZeroUsize::new(10_000).unwrap()),
             last_github_event_id: None,
         }
     }
 
+    #[cfg(target_os = "macos")]
     fn hash_item(s: &str) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         s.hash(&mut hasher);

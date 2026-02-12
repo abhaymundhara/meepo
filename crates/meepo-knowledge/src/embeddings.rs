@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Configuration for the embedding system
 #[derive(Debug, Clone)]
@@ -113,20 +113,20 @@ impl VectorIndex {
             })
             .context("Failed to query embeddings")?;
 
-        let mut embeddings = index.embeddings.lock().unwrap();
-        let mut count = 0;
-        for row in rows {
-            if let Ok((entity_id, blob)) = row {
-                if let Some(vector) = bytes_to_f32_vec(&blob) {
-                    if vector.len() == dimensions {
-                        embeddings.insert(entity_id, vector);
-                        count += 1;
-                    }
+        {
+            let mut embeddings = index.embeddings.lock().unwrap();
+            let mut count = 0;
+            for (entity_id, blob) in rows.flatten() {
+                if let Some(vector) = bytes_to_f32_vec(&blob)
+                    && vector.len() == dimensions
+                {
+                    embeddings.insert(entity_id, vector);
+                    count += 1;
                 }
             }
+            info!("Loaded {} embeddings from database", count);
         }
 
-        info!("Loaded {} embeddings from database", count);
         Ok(index)
     }
 
@@ -165,7 +165,11 @@ impl VectorIndex {
             .collect();
 
         // Sort by similarity descending
-        results.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.similarity
+                .partial_cmp(&a.similarity)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(limit);
 
         results
@@ -236,7 +240,7 @@ fn f32_vec_to_bytes(vec: &[f32]) -> Vec<u8> {
 
 /// Convert bytes back to f32 vector
 fn bytes_to_f32_vec(bytes: &[u8]) -> Option<Vec<f32>> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return None;
     }
     Some(
@@ -253,9 +257,9 @@ fn bytes_to_f32_vec(bytes: &[u8]) -> Option<Vec<f32>> {
 /// RRF score = sum(1 / (k + rank)) across both result lists.
 /// This is the standard method for combining heterogeneous ranked lists.
 pub fn hybrid_search_rrf(
-    keyword_results: &[String],   // entity IDs ordered by keyword relevance
+    keyword_results: &[String], // entity IDs ordered by keyword relevance
     vector_results: &[VectorSearchResult],
-    k: f32,                       // RRF constant (typically 60.0)
+    k: f32, // RRF constant (typically 60.0)
     limit: usize,
 ) -> Vec<HybridSearchResult> {
     let mut scores: HashMap<String, (f32, Option<usize>, Option<usize>)> = HashMap::new();
@@ -286,7 +290,11 @@ pub fn hybrid_search_rrf(
         })
         .collect();
 
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results.truncate(limit);
 
     results

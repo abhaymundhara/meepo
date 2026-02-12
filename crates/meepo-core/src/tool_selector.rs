@@ -113,7 +113,11 @@ fn select_heuristic(
         relevant_prefixes.push("list_note");
         relevant_prefixes.push("create_note");
     }
-    if lower.contains("browser") || lower.contains("web page") || lower.contains("website") || lower.contains("tab") {
+    if lower.contains("browser")
+        || lower.contains("web page")
+        || lower.contains("website")
+        || lower.contains("tab")
+    {
         relevant_prefixes.push("browser_");
     }
     if lower.contains("search") || lower.contains("look up") || lower.contains("find") {
@@ -121,7 +125,11 @@ fn select_heuristic(
         relevant_prefixes.push("browse_url");
         relevant_prefixes.push("search_");
     }
-    if lower.contains("code") || lower.contains("pr ") || lower.contains("pull request") || lower.contains("github") {
+    if lower.contains("code")
+        || lower.contains("pr ")
+        || lower.contains("pull request")
+        || lower.contains("github")
+    {
         relevant_prefixes.push("write_code");
         relevant_prefixes.push("make_pr");
         relevant_prefixes.push("review_pr");
@@ -142,7 +150,11 @@ fn select_heuristic(
         relevant_prefixes.push("list_watcher");
         relevant_prefixes.push("cancel_watcher");
     }
-    if lower.contains("command") || lower.contains("terminal") || lower.contains("shell") || lower.contains("run ") {
+    if lower.contains("command")
+        || lower.contains("terminal")
+        || lower.contains("shell")
+        || lower.contains("run ")
+    {
         relevant_prefixes.push("run_command");
     }
     if lower.contains("screen") || lower.contains("click") || lower.contains("type") {
@@ -165,7 +177,11 @@ fn select_heuristic(
         relevant_prefixes.push("agent_status");
         relevant_prefixes.push("stop_task");
     }
-    if lower.contains("remember") || lower.contains("memory") || lower.contains("knowledge") || lower.contains("know") {
+    if lower.contains("remember")
+        || lower.contains("memory")
+        || lower.contains("knowledge")
+        || lower.contains("know")
+    {
         relevant_prefixes.push("remember");
         relevant_prefixes.push("recall");
         relevant_prefixes.push("search_knowledge");
@@ -207,7 +223,13 @@ async fn select_with_llm(
     // Build tool list summary
     let tool_list: String = all_tools
         .iter()
-        .map(|t| format!("- {}: {}", t.name, t.description.chars().take(80).collect::<String>()))
+        .map(|t| {
+            format!(
+                "- {}: {}",
+                t.name,
+                t.description.chars().take(80).collect::<String>()
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
 

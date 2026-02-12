@@ -11,11 +11,16 @@ pub mod agent;
 pub mod api;
 pub mod autonomy;
 pub mod context;
+pub mod corrective_rag;
+pub mod middleware;
 pub mod notifications;
 pub mod orchestrator;
 pub mod platform;
+pub mod query_router;
 pub mod skills;
+pub mod summarization;
 pub mod tavily;
+pub mod tool_selector;
 pub mod tools;
 pub mod types;
 
@@ -24,11 +29,16 @@ pub use agent::Agent;
 pub use api::{ApiClient, ApiMessage, ApiResponse, ContentBlock, MessageContent, ToolDefinition};
 pub use autonomy::{AutonomousLoop, AutonomyConfig};
 pub use context::build_system_prompt;
+pub use corrective_rag::CorrectiveRagConfig;
+pub use middleware::{AgentMiddleware, MiddlewareChain, MiddlewareContext};
 pub use notifications::{NotificationService, NotifyConfig, NotifyEvent};
 pub use orchestrator::{
     ExecutionMode, FilteredToolExecutor, OrchestratorConfig, SubTask, SubTaskResult, SubTaskStatus,
     TaskGroup, TaskOrchestrator,
 };
+pub use query_router::{QueryComplexity, QueryRouterConfig, RetrievalStrategy};
+pub use summarization::SummarizationConfig;
+pub use tool_selector::ToolSelectorConfig;
 pub use tools::{ToolExecutor, ToolHandler, ToolRegistry};
 pub use types::{ChannelType, IncomingMessage, MessageKind, OutgoingMessage};
 

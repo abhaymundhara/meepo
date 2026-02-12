@@ -6,7 +6,7 @@
 //! Inspired by Adaptive RAG (Jeong et al., 2024).
 
 use anyhow::{Context, Result};
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::api::{ApiClient, ApiMessage, ContentBlock, MessageContent};
 
@@ -156,7 +156,17 @@ fn classify_heuristic(query: &str) -> QueryComplexity {
 
     // Very short queries or greetings → no retrieval
     if word_count <= 3 {
-        let greetings = ["hi", "hello", "hey", "thanks", "thank you", "bye", "ok", "yes", "no"];
+        let greetings = [
+            "hi",
+            "hello",
+            "hey",
+            "thanks",
+            "thank you",
+            "bye",
+            "ok",
+            "yes",
+            "no",
+        ];
         if greetings.iter().any(|g| lower.trim() == *g) {
             return QueryComplexity::NoRetrieval;
         }
@@ -168,14 +178,23 @@ fn classify_heuristic(query: &str) -> QueryComplexity {
     }
 
     // Simple math → no retrieval
-    if lower.starts_with("what is ") && lower.chars().any(|c| c == '+' || c == '-' || c == '*' || c == '/') {
+    if lower.starts_with("what is ")
+        && lower
+            .chars()
+            .any(|c| c == '+' || c == '-' || c == '*' || c == '/')
+    {
         return QueryComplexity::NoRetrieval;
     }
 
     // Recall/memory queries → single step
     let recall_signals = [
-        "what did i", "do you remember", "recall", "what do you know about",
-        "tell me about", "who is", "what is my",
+        "what did i",
+        "do you remember",
+        "recall",
+        "what do you know about",
+        "tell me about",
+        "who is",
+        "what is my",
     ];
     if recall_signals.iter().any(|s| lower.contains(s)) {
         return QueryComplexity::SingleStep;
@@ -183,8 +202,15 @@ fn classify_heuristic(query: &str) -> QueryComplexity {
 
     // Web search signals → multi source
     let web_signals = [
-        "latest", "news", "current", "today", "search for", "look up",
-        "find out", "what's happening", "trending",
+        "latest",
+        "news",
+        "current",
+        "today",
+        "search for",
+        "look up",
+        "find out",
+        "what's happening",
+        "trending",
     ];
     if web_signals.iter().any(|s| lower.contains(s)) {
         return QueryComplexity::MultiSource;
@@ -192,9 +218,17 @@ fn classify_heuristic(query: &str) -> QueryComplexity {
 
     // Complex reasoning signals → multi hop
     let complex_signals = [
-        "compare", "analyze", "summarize all", "across", "relationship between",
-        "how does", "why did", "what are the implications", "plan for",
-        "step by step", "research",
+        "compare",
+        "analyze",
+        "summarize all",
+        "across",
+        "relationship between",
+        "how does",
+        "why did",
+        "what are the implications",
+        "plan for",
+        "step by step",
+        "research",
     ];
     if complex_signals.iter().any(|s| lower.contains(s)) {
         return QueryComplexity::MultiHop;
@@ -202,8 +236,8 @@ fn classify_heuristic(query: &str) -> QueryComplexity {
 
     // Action commands → single step (tools will handle it)
     let action_signals = [
-        "send", "create", "open", "play", "set", "schedule", "remind",
-        "write", "make", "run", "execute", "start", "stop",
+        "send", "create", "open", "play", "set", "schedule", "remind", "write", "make", "run",
+        "execute", "start", "stop",
     ];
     if action_signals.iter().any(|s| lower.starts_with(s)) {
         return QueryComplexity::SingleStep;
@@ -235,7 +269,11 @@ async fn classify_with_llm(api: &ApiClient, query: &str) -> Result<QueryComplexi
     }];
 
     let response = api
-        .chat(&messages, &[], "You are a query classifier. Respond with exactly one word.")
+        .chat(
+            &messages,
+            &[],
+            "You are a query classifier. Respond with exactly one word.",
+        )
         .await
         .context("Failed to classify query")?;
 
