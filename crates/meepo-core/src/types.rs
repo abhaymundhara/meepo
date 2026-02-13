@@ -43,6 +43,10 @@ pub enum ChannelType {
     Slack,
     IMessage,
     Email,
+    Alexa,
+    Reminders,
+    Notes,
+    Contacts,
     Internal, // for watcher-generated messages
 }
 
@@ -54,6 +58,10 @@ impl ChannelType {
             "slack" => Self::Slack,
             "imessage" => Self::IMessage,
             "email" => Self::Email,
+            "alexa" => Self::Alexa,
+            "reminders" => Self::Reminders,
+            "notes" => Self::Notes,
+            "contacts" => Self::Contacts,
             _ => Self::Internal,
         }
     }
@@ -66,6 +74,10 @@ impl std::fmt::Display for ChannelType {
             Self::Slack => write!(f, "slack"),
             Self::IMessage => write!(f, "imessage"),
             Self::Email => write!(f, "email"),
+            Self::Alexa => write!(f, "alexa"),
+            Self::Reminders => write!(f, "reminders"),
+            Self::Notes => write!(f, "notes"),
+            Self::Contacts => write!(f, "contacts"),
             Self::Internal => write!(f, "internal"),
         }
     }

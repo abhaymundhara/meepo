@@ -97,6 +97,93 @@ poll_interval_secs = 10                  # How often to check for new emails
 subject_prefix = "[meepo]"              # Emails must have this subject prefix
 
 
+# ── Alexa Channel (optional) ─────────────────────────────────────
+# Talk to Meepo via Amazon Alexa on any Echo device or Alexa-enabled device.
+#
+# Setup:
+#   1. Go to https://developer.amazon.com/alexa/console/ask
+#   2. Create a new Custom Skill → name it "Meepo"
+#   3. Set the endpoint to your Meepo instance URL (use ngrok for local dev)
+#   4. Copy the Skill ID (starts with amzn1.ask.skill....)
+#   5. export ALEXA_SKILL_ID="amzn1.ask.skill...."
+#
+# How it works:
+#   - Alexa sends skill invocation requests to Meepo's HTTP endpoint
+#   - Meepo processes the request and returns a spoken response
+#   - Works with any Alexa-enabled device linked to your Amazon account
+
+[channels.alexa]
+enabled = false
+skill_id = "${ALEXA_SKILL_ID}"
+poll_interval_secs = 3
+
+
+# ── Reminders Channel (macOS only) ──────────────────────────────
+# Talk to Meepo via Apple Reminders. No API key needed — uses macOS directly.
+#
+# How it works:
+#   - Meepo polls Reminders.app for incomplete reminders in the configured list
+#   - New reminders are read as incoming messages, then marked completed
+#   - Outgoing messages create new reminders in the same list
+#
+# Requirements:
+#   - macOS with Reminders.app
+#   - Automation permissions for your terminal app:
+#     System Settings → Privacy & Security → Automation → Terminal → Reminders
+#
+# Example: Create a reminder in the "Meepo" list → Meepo processes it
+
+[channels.reminders]
+enabled = false
+poll_interval_secs = 10
+list_name = "Meepo"                     # Reminders list to monitor
+
+
+# ── Notes Channel (macOS only) ──────────────────────────────────
+# Talk to Meepo via Apple Notes. No API key needed — uses macOS directly.
+#
+# How it works:
+#   - Meepo polls Notes.app for notes in the configured folder
+#   - Only notes whose title starts with the tag prefix are processed
+#   - After processing, the tag prefix is removed from the title
+#   - Outgoing messages create new notes in the same folder
+#
+# Requirements:
+#   - macOS with Notes.app
+#   - Automation permissions for your terminal app:
+#     System Settings → Privacy & Security → Automation → Terminal → Notes
+#
+# Example: Create a note titled "#meepo What's the weather?" in the "Meepo" folder
+
+[channels.notes]
+enabled = false
+poll_interval_secs = 10
+folder_name = "Meepo"                   # Notes folder to monitor
+tag_prefix = "#meepo "                  # Notes must start with this to be processed
+
+
+# ── Contacts Channel (macOS only) ─────────────────────────────────
+# Interact with Meepo via Apple Contacts. No API key needed — uses macOS directly.
+#
+# How it works:
+#   - Meepo polls Contacts.app for contacts in the configured group
+#   - New contacts in the group are read as incoming messages
+#   - After processing, the contact is removed from the group (not deleted)
+#   - Outgoing messages create new contacts in the same group
+#
+# Requirements:
+#   - macOS with Contacts.app
+#   - Automation permissions for your terminal app:
+#     System Settings → Privacy & Security → Automation → Terminal → Contacts
+#
+# Example: Add a contact to the "Meepo" group → Meepo processes it
+
+[channels.contacts]
+enabled = false
+poll_interval_secs = 10
+group_name = "Meepo"                    # Contacts group to monitor
+
+
 # ── Knowledge Graph ──────────────────────────────────────────────
 
 [knowledge]
@@ -290,6 +377,67 @@ allowed_tools = []              # tools available to incoming A2A tasks
 [skills]
 enabled = false
 dir = "~/.meepo/skills"
+
+
+# ── Lifestyle Integrations ──────────────────────────────────────
+# Tools for deep lifestyle automation: email intelligence, calendar,
+# research, SMS, tasks, news, finance, health, travel, and social.
+# All data is stored in the knowledge graph. Most tools work cross-platform;
+# email/calendar/SMS tools require macOS (Mail.app, Calendar.app, Messages.app).
+
+[lifestyle]
+# Email Intelligence — triage, draft replies, summarize threads, unsubscribe
+[lifestyle.email]
+enabled = true
+triage_default_hours = 24           # default lookback for email_triage
+max_scan_emails = 200               # max emails to scan for unsubscribe
+
+# Smart Calendar — find free time, schedule/reschedule, briefings
+[lifestyle.calendar]
+enabled = true
+working_hours_start = "09:00"
+working_hours_end = "17:00"
+briefing_include_weather = true
+
+# Deep Research — multi-query research, reports, topic tracking, fact-check
+[lifestyle.research]
+enabled = true
+default_depth = "standard"          # quick, standard, deep
+max_sources = 25
+
+# SMS/iMessage Autopilot — send texts, auto-reply, message summaries
+[lifestyle.sms]
+enabled = true
+auto_reply_default_duration = 60    # minutes
+
+# Task & Project Manager — GTD-style task system in knowledge graph
+[lifestyle.tasks]
+enabled = true
+default_priority = "medium"         # critical, high, medium, low
+
+# News & Content Curator — track feeds, summarize articles, digests
+[lifestyle.news]
+enabled = true
+default_check_interval_hours = 12
+max_items_per_feed = 10
+
+# Finance & Expense Tracker — log expenses, budgets, receipt parsing
+[lifestyle.finance]
+enabled = true
+default_currency = "USD"
+
+# Health & Habit Tracker — log habits, streaks, reports
+[lifestyle.health]
+enabled = true
+
+# Travel & Commute Assistant — weather, directions, flights, packing
+[lifestyle.travel]
+enabled = true
+
+# Social & Relationship Manager — relationship tracking, follow-ups
+[lifestyle.social]
+enabled = true
+inactive_days_threshold = 30        # flag contacts not reached in N days
 
 
 # ── Browser Automation (macOS only — not yet available on Windows) ─

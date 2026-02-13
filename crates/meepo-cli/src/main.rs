@@ -490,6 +490,27 @@ async fn cmd_setup() -> Result<()> {
         println!();
     }
 
+    // Alexa
+    print!("  Enable Alexa channel? (talk to Meepo via Amazon Echo) [y/N]: ");
+    io::stdout().flush()?;
+    if prompt_yes_no()? {
+        println!("  Create a custom Alexa Skill at https://developer.amazon.com/alexa/console/ask");
+        println!("  Then copy the Skill ID (starts with amzn1.ask.skill....)");
+        print!("  Skill ID (or Enter to skip): ");
+        io::stdout().flush()?;
+        let mut skill_id = String::new();
+        io::stdin().lock().read_line(&mut skill_id)?;
+        let skill_id = skill_id.trim().to_string();
+        if !skill_id.is_empty() {
+            save_env_var_persistent("ALEXA_SKILL_ID", &skill_id)?;
+            update_config_value(&config_path, "channels.alexa", "enabled", "true")?;
+            println!("  ✓ Alexa enabled with skill: {}", skill_id);
+        } else {
+            println!("  Skipped — set ALEXA_SKILL_ID later to enable.");
+        }
+    }
+    println!();
+
     // Notifications
     print!("  Enable proactive notifications? (Meepo messages you about tasks) [y/N]: ");
     io::stdout().flush()?;
@@ -1146,7 +1167,153 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
         watcher_command_tx.clone(),
         bg_task_tx.clone(),
     )));
-    info!("Registered {} tools", registry.len());
+    // ── Lifestyle Integration Tools ──────────────────────────────
+    // Phase 1: Email Intelligence (macOS/Windows only — needs email provider)
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        registry.register(Arc::new(
+            meepo_core::tools::lifestyle::email_intelligence::EmailTriageTool::new(db.clone()),
+        ));
+        registry.register(Arc::new(
+            meepo_core::tools::lifestyle::email_intelligence::EmailDraftReplyTool::new(db.clone()),
+        ));
+        registry.register(Arc::new(
+            meepo_core::tools::lifestyle::email_intelligence::EmailSummarizeThreadTool::new(),
+        ));
+        registry.register(Arc::new(
+            meepo_core::tools::lifestyle::email_intelligence::EmailUnsubscribeTool::new(),
+        ));
+    }
+    // Phase 1: Smart Calendar (macOS/Windows only — needs calendar provider)
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        registry.register(Arc::new(
+            meepo_core::tools::lifestyle::calendar::FindFreeTimeTool::new(),
+        ));
+        registry.register(Arc::new(
+            meepo_core::tools::lifestyle::calendar::ScheduleMeetingTool::new(),
+        ));
+        registry.register(Arc::new(
+            meepo_core::tools::lifestyle::calendar::RescheduleEventTool::new(),
+        ));
+        registry.register(Arc::new(
+            meepo_core::tools::lifestyle::calendar::DailyBriefingTool::new(db.clone()),
+        ));
+        registry.register(Arc::new(
+            meepo_core::tools::lifestyle::calendar::WeeklyReviewTool::new(db.clone()),
+        ));
+    }
+    // Phase 1: Deep Research (cross-platform — uses Tavily + knowledge graph)
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::research::ResearchTopicTool::new(
+            tavily_client.clone(),
+            db.clone(),
+        ),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::research::CompileReportTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::research::TrackTopicTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::research::FactCheckTool::new(
+            tavily_client.clone(),
+            db.clone(),
+        ),
+    ));
+    // Phase 2: SMS/iMessage Autopilot (cross-platform — send_sms is macOS only at runtime)
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::sms::SendSmsTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::sms::SetAutoReplyTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::sms::MessageSummaryTool::new(db.clone()),
+    ));
+    // Phase 2: Task & Project Manager (cross-platform — knowledge graph)
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::tasks::CreateTaskTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::tasks::ListTasksTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::tasks::UpdateTaskTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::tasks::CompleteTaskTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::tasks::ProjectStatusTool::new(db.clone()),
+    ));
+    // Phase 2: News & Content Curator (cross-platform — Tavily + knowledge graph)
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::news::TrackFeedTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::news::UntrackFeedTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::news::SummarizeArticleTool::new(
+            tavily_client.clone(),
+            db.clone(),
+        ),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::news::ContentDigestTool::new(
+            tavily_client.clone(),
+            db.clone(),
+        ),
+    ));
+    // Phase 3: Finance & Expense Tracker (cross-platform — knowledge graph)
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::finance::LogExpenseTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::finance::SpendingSummaryTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::finance::BudgetCheckTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::finance::ParseReceiptTool::new(db.clone()),
+    ));
+    // Phase 3: Health & Habit Tracker (cross-platform — knowledge graph)
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::health::LogHabitTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::health::HabitStreakTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::health::HabitReportTool::new(db.clone()),
+    ));
+    // Phase 3: Travel & Commute Assistant (cross-platform — Tavily + knowledge graph)
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::travel::GetWeatherTool::new(tavily_client.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::travel::GetDirectionsTool::new(tavily_client.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::travel::FlightStatusTool::new(
+            tavily_client.clone(),
+            db.clone(),
+        ),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::travel::PackingListTool::new(db.clone()),
+    ));
+    // Phase 3: Social & Relationship Manager (cross-platform — knowledge graph)
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::social::RelationshipSummaryTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::social::SuggestFollowupsTool::new(db.clone()),
+    ));
+    info!("Registered {} tools (including lifestyle integrations)", registry.len());
 
     // Initialize progress channel for sub-agent orchestrator
     let (progress_tx, mut progress_rx) =
@@ -1355,6 +1522,62 @@ async fn cmd_start(config_path: &Option<PathBuf>) -> Result<()> {
         warn!(
             "Email channel (Mail.app) is only available on macOS — use the read_emails/send_email tools for Outlook on Windows"
         );
+    }
+
+    // Register Alexa channel if enabled
+    if cfg.channels.alexa.enabled {
+        let alexa = meepo_channels::alexa::AlexaChannel::new(
+            shellexpand_str(&cfg.channels.alexa.skill_id),
+            std::time::Duration::from_secs(cfg.channels.alexa.poll_interval_secs),
+        );
+        bus.register(Box::new(alexa));
+        info!("Alexa channel registered");
+    }
+
+    // Register Reminders channel if enabled (macOS only)
+    #[cfg(target_os = "macos")]
+    if cfg.channels.reminders.enabled {
+        let reminders = meepo_channels::reminders::RemindersChannel::new(
+            std::time::Duration::from_secs(cfg.channels.reminders.poll_interval_secs),
+            cfg.channels.reminders.list_name.clone(),
+        );
+        bus.register(Box::new(reminders));
+        info!("Reminders channel registered");
+    }
+    #[cfg(not(target_os = "macos"))]
+    if cfg.channels.reminders.enabled {
+        warn!("Reminders channel is only available on macOS — ignoring");
+    }
+
+    // Register Notes channel if enabled (macOS only)
+    #[cfg(target_os = "macos")]
+    if cfg.channels.notes.enabled {
+        let notes = meepo_channels::notes::NotesChannel::new(
+            std::time::Duration::from_secs(cfg.channels.notes.poll_interval_secs),
+            cfg.channels.notes.folder_name.clone(),
+            cfg.channels.notes.tag_prefix.clone(),
+        );
+        bus.register(Box::new(notes));
+        info!("Notes channel registered");
+    }
+    #[cfg(not(target_os = "macos"))]
+    if cfg.channels.notes.enabled {
+        warn!("Notes channel is only available on macOS — ignoring");
+    }
+
+    // Register Contacts channel if enabled (macOS only)
+    #[cfg(target_os = "macos")]
+    if cfg.channels.contacts.enabled {
+        let contacts = meepo_channels::contacts::ContactsChannel::new(
+            std::time::Duration::from_secs(cfg.channels.contacts.poll_interval_secs),
+            cfg.channels.contacts.group_name.clone(),
+        );
+        bus.register(Box::new(contacts));
+        info!("Contacts channel registered");
+    }
+    #[cfg(not(target_os = "macos"))]
+    if cfg.channels.contacts.enabled {
+        warn!("Contacts channel is only available on macOS — ignoring");
     }
 
     // Start all channels
@@ -2347,6 +2570,125 @@ async fn cmd_mcp_server(config_path: &Option<PathBuf>) -> Result<()> {
     // Autonomous tools — agent_status works in MCP mode, spawn/stop won't have handlers
     registry.register(Arc::new(
         meepo_core::tools::autonomous::AgentStatusTool::new(db.clone()),
+    ));
+
+    // ── Lifestyle Integration Tools (MCP mode) ──────────────────
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        registry.register(Arc::new(
+            meepo_core::tools::lifestyle::email_intelligence::EmailTriageTool::new(db.clone()),
+        ));
+        registry.register(Arc::new(
+            meepo_core::tools::lifestyle::email_intelligence::EmailDraftReplyTool::new(db.clone()),
+        ));
+        registry.register(Arc::new(
+            meepo_core::tools::lifestyle::email_intelligence::EmailSummarizeThreadTool::new(),
+        ));
+        registry.register(Arc::new(
+            meepo_core::tools::lifestyle::email_intelligence::EmailUnsubscribeTool::new(),
+        ));
+        registry.register(Arc::new(
+            meepo_core::tools::lifestyle::calendar::FindFreeTimeTool::new(),
+        ));
+        registry.register(Arc::new(
+            meepo_core::tools::lifestyle::calendar::ScheduleMeetingTool::new(),
+        ));
+        registry.register(Arc::new(
+            meepo_core::tools::lifestyle::calendar::RescheduleEventTool::new(),
+        ));
+        registry.register(Arc::new(
+            meepo_core::tools::lifestyle::calendar::DailyBriefingTool::new(db.clone()),
+        ));
+        registry.register(Arc::new(
+            meepo_core::tools::lifestyle::calendar::WeeklyReviewTool::new(db.clone()),
+        ));
+    }
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::research::ResearchTopicTool::new(tavily_client.clone(), db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::research::CompileReportTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::research::TrackTopicTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::research::FactCheckTool::new(tavily_client.clone(), db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::sms::SendSmsTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::sms::SetAutoReplyTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::sms::MessageSummaryTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::tasks::CreateTaskTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::tasks::ListTasksTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::tasks::UpdateTaskTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::tasks::CompleteTaskTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::tasks::ProjectStatusTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::news::TrackFeedTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::news::UntrackFeedTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::news::SummarizeArticleTool::new(tavily_client.clone(), db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::news::ContentDigestTool::new(tavily_client.clone(), db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::finance::LogExpenseTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::finance::SpendingSummaryTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::finance::BudgetCheckTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::finance::ParseReceiptTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::health::LogHabitTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::health::HabitStreakTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::health::HabitReportTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::travel::GetWeatherTool::new(tavily_client.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::travel::GetDirectionsTool::new(tavily_client.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::travel::FlightStatusTool::new(tavily_client.clone(), db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::travel::PackingListTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::social::RelationshipSummaryTool::new(db.clone()),
+    ));
+    registry.register(Arc::new(
+        meepo_core::tools::lifestyle::social::SuggestFollowupsTool::new(db.clone()),
     ));
 
     // Load skills if enabled

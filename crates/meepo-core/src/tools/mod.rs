@@ -15,6 +15,7 @@ pub mod browser;
 pub mod code;
 pub mod delegate;
 pub mod filesystem;
+pub mod lifestyle;
 pub mod macos;
 pub mod memory;
 pub mod rag;

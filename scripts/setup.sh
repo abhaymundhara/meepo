@@ -308,7 +308,7 @@ fi
 
 print_step 6 "Channels"
 
-echo "  Meepo can listen on Discord, Slack, and/or iMessage."
+echo "  Meepo can listen on Discord, Slack, iMessage, and/or Alexa."
 echo -e "  ${DIM}You can also skip all channels and use 'meepo ask' from the CLI.${NC}"
 echo ""
 
@@ -434,6 +434,40 @@ if ask_yn "Enable iMessage?"; then
     print_ok "iMessage enabled"
 fi
 
+# ── Alexa ──
+
+echo ""
+if ask_yn "Enable Alexa? (talk to Meepo via Amazon Echo)"; then
+    echo ""
+    echo -e "  ${BOLD}Quick setup:${NC} Create a custom Alexa Skill and copy the Skill ID."
+    print_url "https://developer.amazon.com/alexa/console/ask"
+
+    if ask_yn "Open Alexa Developer Console?"; then
+        open_url "https://developer.amazon.com/alexa/console/ask"
+        print_dim "Opened in browser"
+    fi
+
+    echo ""
+    echo -e "  ${DIM}In the console:${NC}"
+    echo -e "  ${DIM}  1. Create Skill → Custom → \"Meepo\"${NC}"
+    echo -e "  ${DIM}  2. Set endpoint to your Meepo instance URL${NC}"
+    echo -e "  ${DIM}     (use ngrok for local dev: ngrok http 3000)${NC}"
+    echo -e "  ${DIM}  3. Copy the Skill ID (starts with amzn1.ask.skill....)${NC}"
+    echo ""
+
+    ALEXA_SKILL=$(ask_value "Alexa Skill ID (or Enter to skip)" "")
+
+    if [ -n "$ALEXA_SKILL" ]; then
+        save_env_var "ALEXA_SKILL_ID" "$ALEXA_SKILL" "Meepo - Alexa skill"
+        print_ok "Skill ID saved"
+    else
+        print_warn "No skill ID — set ALEXA_SKILL_ID later"
+    fi
+
+    sed -i '' '/^\[channels\.alexa\]$/,/^\[/{s/^enabled = false/enabled = true/;}' "$CONFIG_FILE"
+    print_ok "Alexa enabled"
+fi
+
 # ── Step 7: Verify ──────────────────────────────────────────────
 
 print_step 7 "Verify"
@@ -466,7 +500,7 @@ echo ""
 
 # API key status
 echo -e "  ${BOLD}Keys${NC}"
-for var in ANTHROPIC_API_KEY TAVILY_API_KEY DISCORD_BOT_TOKEN SLACK_BOT_TOKEN; do
+for var in ANTHROPIC_API_KEY TAVILY_API_KEY DISCORD_BOT_TOKEN SLACK_BOT_TOKEN ALEXA_SKILL_ID; do
     if [ -n "${!var:-}" ]; then
         echo -e "  ${GREEN}✓${NC} $var"
     else

@@ -96,6 +96,14 @@ pub struct ChannelsConfig {
     pub imessage: IMessageConfig,
     #[serde(default)]
     pub email: EmailConfig,
+    #[serde(default)]
+    pub alexa: AlexaConfig,
+    #[serde(default)]
+    pub reminders: RemindersConfig,
+    #[serde(default)]
+    pub notes: NotesConfig,
+    #[serde(default)]
+    pub contacts: ContactsConfig,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -180,8 +188,133 @@ impl Default for EmailConfig {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct AlexaConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub skill_id: String,
+    #[serde(default = "default_alexa_poll_interval")]
+    pub poll_interval_secs: u64,
+}
+
+impl std::fmt::Debug for AlexaConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AlexaConfig")
+            .field("enabled", &self.enabled)
+            .field("skill_id", &self.skill_id)
+            .field("poll_interval_secs", &self.poll_interval_secs)
+            .finish()
+    }
+}
+
+impl Default for AlexaConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            skill_id: String::new(),
+            poll_interval_secs: default_alexa_poll_interval(),
+        }
+    }
+}
+
+fn default_alexa_poll_interval() -> u64 {
+    3
+}
+
 fn default_slack_poll_interval() -> u64 {
     3
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemindersConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_reminders_poll_interval")]
+    pub poll_interval_secs: u64,
+    #[serde(default = "default_reminders_list_name")]
+    pub list_name: String,
+}
+
+fn default_reminders_poll_interval() -> u64 {
+    10
+}
+
+fn default_reminders_list_name() -> String {
+    "Meepo".to_string()
+}
+
+impl Default for RemindersConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            poll_interval_secs: default_reminders_poll_interval(),
+            list_name: default_reminders_list_name(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotesConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_notes_poll_interval")]
+    pub poll_interval_secs: u64,
+    #[serde(default = "default_notes_folder_name")]
+    pub folder_name: String,
+    #[serde(default = "default_notes_tag_prefix")]
+    pub tag_prefix: String,
+}
+
+fn default_notes_poll_interval() -> u64 {
+    10
+}
+
+fn default_notes_folder_name() -> String {
+    "Meepo".to_string()
+}
+
+fn default_notes_tag_prefix() -> String {
+    "#meepo ".to_string()
+}
+
+impl Default for NotesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            poll_interval_secs: default_notes_poll_interval(),
+            folder_name: default_notes_folder_name(),
+            tag_prefix: default_notes_tag_prefix(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContactsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_contacts_poll_interval")]
+    pub poll_interval_secs: u64,
+    #[serde(default = "default_contacts_group_name")]
+    pub group_name: String,
+}
+
+fn default_contacts_poll_interval() -> u64 {
+    10
+}
+
+fn default_contacts_group_name() -> String {
+    "Meepo".to_string()
+}
+
+impl Default for ContactsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            poll_interval_secs: default_contacts_poll_interval(),
+            group_name: default_contacts_group_name(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

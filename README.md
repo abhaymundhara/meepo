@@ -7,7 +7,7 @@ Meepo runs as a daemon on your machine with an autonomous observe/think/act loop
 ## Features
 
 - **Multi-channel messaging** — Discord DMs, Slack DMs, iMessage (macOS), email (macOS), or CLI one-shots
-- **40+ built-in tools** — Email, calendar, reminders, notes, contacts, browser automation, web search, file browsing, code PRs, music control, screen capture, and more
+- **75+ built-in tools** — Email, calendar, reminders, notes, contacts, browser automation, web search, file browsing, code PRs, music control, screen capture, lifestyle integrations (research, tasks, finance, health, travel, social), and more
 - **Autonomous agent loop** — Observe/think/act cycle with goal tracking, proactive actions, and notification alerts
 - **Cross-platform** — macOS (AppleScript) and Windows (PowerShell/Outlook COM) with platform abstraction layer
 - **MCP support** — Expose Meepo's tools as an MCP server (STDIO) for Claude Desktop, Cursor, etc. — and consume tools from external MCP servers
@@ -340,7 +340,7 @@ Environment variables are expanded with `${VAR_NAME}` syntax. Paths support `~/`
 
 ## Tools
 
-Meepo registers 40+ tools that Claude can use during conversations:
+Meepo registers 75+ tools that Claude can use during conversations:
 
 | Category | Tools |
 |----------|-------|
@@ -358,6 +358,16 @@ Meepo registers 40+ tools that Claude can use during conversations:
 | **Watchers** | `create_watcher`, `list_watchers`, `cancel_watcher` |
 | **Autonomous** | `spawn_background_task`, `agent_status`, `stop_task` |
 | **Delegation** | `delegate_tasks` |
+| **Email Intelligence** | `email_triage`, `email_draft_reply`, `email_summarize_thread`, `email_unsubscribe` |
+| **Smart Calendar** | `find_free_time`, `schedule_meeting`, `reschedule_event`, `daily_briefing`, `weekly_review` |
+| **Deep Research** | `research_topic`, `compile_report`, `track_topic`, `fact_check` |
+| **SMS Autopilot** | `send_sms`, `set_auto_reply`, `message_summary` |
+| **Task Manager** | `create_task`, `list_tasks`, `update_task`, `complete_task`, `project_status` |
+| **News Curator** | `track_feed`, `untrack_feed`, `summarize_article`, `content_digest` |
+| **Finance Tracker** | `log_expense`, `spending_summary`, `budget_check`, `parse_receipt` |
+| **Health & Habits** | `log_habit`, `habit_streak`, `habit_report` |
+| **Travel Assistant** | `get_weather`, `get_directions`, `flight_status`, `packing_list` |
+| **Social Manager** | `relationship_summary`, `suggest_followups` |
 
 ## Architecture
 

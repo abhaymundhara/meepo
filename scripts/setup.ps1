@@ -192,7 +192,7 @@ if (Ask-YN "Set up Tavily?") {
 
 Print-Step 6 "Channels"
 
-Write-Host "  Meepo can listen on Discord and/or Slack."
+Write-Host "  Meepo can listen on Discord, Slack, and/or Alexa."
 Print-Dim "You can also skip all channels and use 'meepo ask' from the CLI."
 Write-Host ""
 
@@ -288,6 +288,42 @@ if (Ask-YN "Enable Slack?") {
     Set-Content $ConfigFile $content
 
     Print-Ok "Slack enabled"
+}
+
+# ── Alexa ──
+Write-Host ""
+if (Ask-YN "Enable Alexa? (talk to Meepo via Amazon Echo)") {
+    Write-Host ""
+    Write-Host "  Quick setup: Create a custom Alexa Skill and copy the Skill ID." -ForegroundColor White
+    Print-Url "https://developer.amazon.com/alexa/console/ask"
+
+    if (Ask-YN "Open Alexa Developer Console?") {
+        Start-Process "https://developer.amazon.com/alexa/console/ask"
+        Print-Dim "Opened in browser"
+    }
+
+    Write-Host ""
+    Print-Dim "In the console:"
+    Print-Dim "  1. Create Skill -> Custom -> `"Meepo`""
+    Print-Dim "  2. Set endpoint to your Meepo instance URL"
+    Print-Dim "     (use ngrok for local dev: ngrok http 3000)"
+    Print-Dim "  3. Copy the Skill ID (starts with amzn1.ask.skill....)"
+    Write-Host ""
+
+    $alexaSkill = Ask-Value "Alexa Skill ID (or Enter to skip)"
+
+    if (-not [string]::IsNullOrEmpty($alexaSkill)) {
+        Save-EnvVar "ALEXA_SKILL_ID" $alexaSkill "Meepo - Alexa skill"
+        Print-Ok "Skill ID saved"
+    } else {
+        Print-Warn "No skill ID - set ALEXA_SKILL_ID later"
+    }
+
+    $content = Get-Content $ConfigFile -Raw
+    $content = $content -replace '(?m)(\[channels\.alexa\]\r?\nenabled = )false', '${1}true'
+    Set-Content $ConfigFile $content
+
+    Print-Ok "Alexa enabled"
 }
 
 # ── Step 7: Verify ──

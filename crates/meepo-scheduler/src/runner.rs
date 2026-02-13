@@ -719,13 +719,16 @@ tell application "Calendar"
     try
         set startDate to current date
         set endDate to (current date) + ({} * days)
-        set theEvents to (every event of calendar "Calendar" whose start date is greater than or equal to startDate and start date is less than or equal to endDate)
         set output to ""
-        repeat with evt in theEvents
-            set output to output & "Event: " & (summary of evt) & "\n"
-            set output to output & "Start: " & (start date of evt as string) & "\n"
-            set output to output & "End: " & (end date of evt as string) & "\n"
-            set output to output & "---\n"
+        repeat with cal in calendars
+            set calName to name of cal
+            set theEvents to (every event of cal whose start date is greater than or equal to startDate and start date is less than or equal to endDate)
+            repeat with evt in theEvents
+                set output to output & "Event: " & (summary of evt) & "\n"
+                set output to output & "Start: " & (start date of evt as string) & "\n"
+                set output to output & "End: " & (end date of evt as string) & "\n"
+                set output to output & "---\n"
+            end repeat
         end repeat
         return output
     on error errMsg

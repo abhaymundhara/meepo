@@ -310,6 +310,44 @@ graph TD
 | `agent_status` | Show active watchers, tasks, recent results | SQLite queries |
 | `stop_task` | Cancel any watcher or background task by ID | CancellationToken + database |
 | `delegate_tasks` | Spawn sub-agent tasks (parallel/background) | TaskOrchestrator |
+| `email_triage` | Categorize and prioritize recent emails | Platform email provider + knowledge graph |
+| `email_draft_reply` | Draft contextual email replies | Platform email provider + knowledge graph |
+| `email_summarize_thread` | Summarize an email thread | Platform email provider |
+| `email_unsubscribe` | Find unsubscribe links in emails | Platform email provider |
+| `find_free_time` | Find available time slots in calendar | Platform calendar provider |
+| `schedule_meeting` | Schedule a meeting with attendees | Platform calendar + contacts + email |
+| `reschedule_event` | Reschedule an existing calendar event | Platform calendar provider |
+| `daily_briefing` | Generate today's schedule briefing | Platform calendar + knowledge graph |
+| `weekly_review` | Generate weekly review with upcoming events | Platform calendar + action log |
+| `research_topic` | Multi-query deep research on a topic | Tavily search + knowledge graph |
+| `compile_report` | Compile research into a structured report | Knowledge graph entities |
+| `track_topic` | Track a topic for ongoing monitoring | Knowledge graph |
+| `fact_check` | Verify a claim against web sources | Tavily search + knowledge graph |
+| `send_sms` | Send SMS/iMessage via Messages.app | AppleScript (macOS) + knowledge graph |
+| `set_auto_reply` | Set auto-reply rules for messages | Knowledge graph preferences |
+| `message_summary` | Summarize recent message conversations | Knowledge graph conversations |
+| `create_task` | Create a task with priority and project | Knowledge graph |
+| `list_tasks` | List tasks with filtering options | Knowledge graph query |
+| `update_task` | Update task status, priority, or details | Knowledge graph |
+| `complete_task` | Mark a task as completed | Knowledge graph |
+| `project_status` | Get project overview with task breakdown | Knowledge graph aggregation |
+| `track_feed` | Subscribe to a news/content feed | Knowledge graph |
+| `untrack_feed` | Unsubscribe from a tracked feed | Knowledge graph |
+| `summarize_article` | Summarize an article from URL | Tavily extract + knowledge graph |
+| `content_digest` | Generate digest of tracked feeds | Tavily search + knowledge graph |
+| `log_expense` | Log an expense with category and vendor | Knowledge graph |
+| `spending_summary` | Get spending summary for a period | Knowledge graph aggregation |
+| `budget_check` | Check spending against budget limits | Knowledge graph |
+| `parse_receipt` | Extract expense data from receipt text | Structured extraction prompt |
+| `log_habit` | Log a habit entry with value and date | Knowledge graph + streak calculation |
+| `habit_streak` | Get streak info for habits | Knowledge graph query |
+| `habit_report` | Generate comprehensive habit report | Knowledge graph aggregation |
+| `get_weather` | Get weather forecast for a location | Tavily search |
+| `get_directions` | Get directions between locations | Tavily search |
+| `flight_status` | Check flight status by flight number | Tavily search + knowledge graph |
+| `packing_list` | Generate smart packing list for a trip | Knowledge graph |
+| `relationship_summary` | Get relationship overview for contacts | Knowledge graph + conversations |
+| `suggest_followups` | Suggest people to follow up with | Knowledge graph + conversations |
 
 ## Knowledge Graph
 
