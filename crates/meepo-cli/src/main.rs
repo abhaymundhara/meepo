@@ -213,35 +213,163 @@ async fn cmd_setup() -> Result<()> {
     let config_path = config_dir.join("config.toml");
     println!("  ✓ Config directory ready\n");
 
-    // ── Step 2: Anthropic API key ───────────────────────────────
-    setup_step(2, total_steps, "Anthropic API Key (required)");
-    println!("  Meepo needs an Anthropic API key to talk to Claude.");
+    // ── Step 2: LLM Provider Selection ─────────────────────────
+    setup_step(2, total_steps, "LLM Provider Selection");
+    println!("  Choose your AI provider:");
     println!();
-    println!("  How to get one:");
-    println!("    1. Go to https://console.anthropic.com/settings/keys");
-    println!("    2. Click \"Create Key\"");
-    println!("    3. Copy the key (starts with sk-ant-...)");
+    println!("    1. Anthropic Claude (API-based, requires key)");
+    println!("       • Best quality, fastest responses");
+    println!("       • Costs ~$3-15 per million tokens");
+    println!("       • Get key: https://console.anthropic.com/settings/keys");
     println!();
+    println!("    2. Ollama (local, free, private)");
+    println!("       • Runs on your machine, no API costs");
+    println!("       • Complete privacy, works offline");
+    println!("       • Requires: Install Ollama + download model");
+    println!();
+    print!("  Enter choice (1 or 2): ");
+    io::stdout().flush()?;
+    let mut provider_choice = String::new();
+    io::stdin().lock().read_line(&mut provider_choice)?;
+    let provider_choice = provider_choice.trim();
 
-    let api_key = if let Ok(existing) = std::env::var("ANTHROPIC_API_KEY") {
-        if !existing.is_empty() && existing.starts_with("sk-ant-") {
-            println!("  ✓ Found ANTHROPIC_API_KEY in environment.");
-            println!(
-                "    Using existing key: {}...{}",
-                &existing[..10],
-                &existing[existing.len() - 4..]
-            );
-            existing
+    let use_ollama = provider_choice == "2";
+    let mut api_key = String::new(); // For Anthropic users
+
+    if use_ollama {
+        println!();
+        println!("  ✓ Selected: Ollama (local)");
+        println!();
+        
+        // Check if Ollama is installed and get model list
+        let ollama_check = std::process::Command::new("ollama")
+            .arg("list")
+            .output();
+
+        match ollama_check {
+            Ok(output) if output.status.success() => {
+                let model_list = String::from_utf8_lossy(&output.stdout);
+                let models: Vec<&str> = model_list
+                    .lines()
+                    .skip(1) // Skip header
+                    .filter(|line| !line.trim().is_empty())
+                    .map(|line| line.split_whitespace().next().unwrap_or(""))
+                    .filter(|m| !m.is_empty())
+                    .collect();
+
+                if models.is_empty() {
+                    println!("  Ollama is installed but no models found.");
+                    println!();
+                    println!("  To download a model:");
+                    println!("    ollama pull llama3.2       # Fast, 2B params");
+                    println!("    ollama pull llama3.2:3b    # Better quality");
+                    println!("    ollama pull qwen2.5:7b     # High quality");
+                    println!();
+                    println!("  You can set up Ollama later.");
+                    println!("  When ready, edit ~/.meepo/config.toml:");
+                    println!();
+                    println!("    [agent]");
+                    println!("    default_model = \"ollama\"");
+                    println!();
+                    println!("    [providers.ollama]");
+                    println!("    base_url = \"http://localhost:11434\"");
+                    println!("    model = \"llama3.2\"");
+                    println!();
+                } else {
+                    println!("  ✓ Found {} installed model(s):", models.len());
+                    println!();
+                    for (i, model) in models.iter().enumerate() {
+                        println!("    {}. {}", i + 1, model);
+                    }
+                    println!();
+                    print!("  Select a model (enter number or press Enter for #1): ");
+                    io::stdout().flush()?;
+                    
+                    let mut choice = String::new();
+                    io::stdin().lock().read_line(&mut choice)?;
+                    let choice = choice.trim();
+                    
+                    let selected_model = if choice.is_empty() {
+                        models[0]
+                    } else if let Ok(idx) = choice.parse::<usize>() {
+                        if idx > 0 && idx <= models.len() {
+                            models[idx - 1]
+                        } else {
+                            println!("  Invalid choice, using first model.");
+                            models[0]
+                        }
+                    } else {
+                        println!("  Invalid input, using first model.");
+                        models[0]
+                    };
+
+                    println!();
+                    println!("  ✓ Selected model: {}", selected_model);
+                    println!();
+                    
+                    // Update config to use Ollama with selected model
+                    let mut cfg = MeepoConfig::load(&None)?;
+                    cfg.agent.default_model = "ollama".to_string();
+                    if let Some(ref mut ollama_cfg) = cfg.providers.ollama {
+                        ollama_cfg.model = selected_model.to_string();
+                    }
+                    
+                    // Write updated config
+                    let config_content = toml::to_string_pretty(&cfg)?;
+                    std::fs::write(&config_path, config_content)?;
+                    
+                    println!("  ✓ Config updated to use Ollama with model: {}", selected_model);
+                    println!();
+                }
+            }
+            Ok(_) | Err(_) => {
+                println!("  Ollama not found or not running.");
+                println!();
+                println!("  Setup steps for Ollama:");
+                println!("    1. Install: curl -fsSL https://ollama.ai/install.sh | sh");
+                println!("    2. Pull a model: ollama pull llama3.2");
+                println!("    3. Start server: ollama serve");
+                println!();
+                println!("  You can set up Ollama later.");
+                println!("  When ready, edit ~/.meepo/config.toml:");
+                println!();
+                println!("    [agent]");
+                println!("    default_model = \"ollama\"");
+                println!();
+                println!("    [providers.ollama]");
+                println!("    base_url = \"http://localhost:11434\"");
+                println!("    model = \"llama3.2\"");
+                println!();
+            }
+        }
+        println!();
+    } else {
+        println!();
+        println!("  ✓ Selected: Anthropic Claude");
+        println!();
+        println!("  You'll need an API key (starts with sk-ant-...)");
+        println!();
+
+        api_key = if let Ok(existing) = std::env::var("ANTHROPIC_API_KEY") {
+            if !existing.is_empty() && existing.starts_with("sk-ant-") {
+                println!("  ✓ Found ANTHROPIC_API_KEY in environment.");
+                println!(
+                    "    Using existing key: {}...{}",
+                    &existing[..10],
+                    &existing[existing.len() - 4..]
+                );
+                existing
+            } else {
+                prompt_api_key()?
+            }
         } else {
             prompt_api_key()?
-        }
-    } else {
-        prompt_api_key()?
-    };
+        };
 
-    // Persist API key
-    save_env_var_persistent("ANTHROPIC_API_KEY", &api_key)?;
-    println!();
+        // Persist API key
+        save_env_var_persistent("ANTHROPIC_API_KEY", &api_key)?;
+        println!();
+    }
 
     // ── Step 3: Optional Tavily key ─────────────────────────────
     setup_step(3, total_steps, "Tavily API Key (optional — web search)");
@@ -532,79 +660,98 @@ async fn cmd_setup() -> Result<()> {
     }
     println!();
 
-    // ── Step 6: Safari JS / Browser verification (macOS) ────────
+    // ── Step 6: Verify Connection ───────────────────────────────
     #[cfg(target_os = "macos")]
     {
         let verify_step = 6;
-        setup_step(verify_step, total_steps, "Verify API Connection");
+        setup_step(verify_step, total_steps, "Verify Connection");
     }
     #[cfg(not(target_os = "macos"))]
     {
         let verify_step = feature_step + 1;
-        setup_step(verify_step, total_steps, "Verify API Connection");
+        setup_step(verify_step, total_steps, "Verify Connection");
     }
 
-    println!("  Testing connection to Anthropic API...\n");
     let cfg = MeepoConfig::load(&None)?;
-    let api =
-        meepo_core::api::ApiClient::new(api_key.clone(), Some(cfg.agent.default_model.clone()));
-    let api_ok = match tokio::time::timeout(
-        std::time::Duration::from_secs(15),
-        api.chat(
-            &[meepo_core::api::ApiMessage {
-                role: "user".to_string(),
-                content: meepo_core::api::MessageContent::Text(
-                    "Say 'hello' in one word.".to_string(),
-                ),
-            }],
-            &[],
-            "You are a helpful assistant.",
-        ),
-    )
-    .await
-    {
-        Ok(Ok(response)) => {
-            let text: String = response
-                .content
-                .iter()
-                .filter_map(|b| {
-                    if let meepo_core::api::ContentBlock::Text { text } = b {
-                        Some(text.as_str())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            println!("  Claude says: {}", text.trim());
-            println!("  ✓ API connection works!\n");
-            true
-        }
-        Ok(Err(e)) => {
-            let err_str = e.to_string();
-            eprintln!("  ✗ API test failed: {}", err_str);
-            if err_str.contains("401") || err_str.contains("auth") || err_str.contains("invalid") {
-                eprintln!("  Your API key may be incorrect or expired.");
+    
+    if use_ollama {
+        println!("  Ollama setup complete!\n");
+        println!("  To verify Ollama is working:");
+        println!("    1. ollama list        # check installed models");
+        println!("    2. ollama serve       # start server");
+        println!("    3. ollama ps          # check running models");
+        println!();
+    } else {
+        println!("  Testing connection to Anthropic API...\n");
+        let api =
+            meepo_core::api::ApiClient::new(api_key.clone(), Some(cfg.agent.default_model.clone()));
+        let api_ok = match tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            api.chat(
+                &[meepo_core::api::ApiMessage {
+                    role: "user".to_string(),
+                    content: meepo_core::api::MessageContent::Text(
+                        "Say 'hello' in one word.".to_string(),
+                    ),
+                }],
+                &[],
+                "You are a helpful assistant.",
+            ),
+        )
+        .await
+        {
+            Ok(Ok(response)) => {
+                let text: String = response
+                    .content
+                    .iter()
+                    .filter_map(|b| {
+                        if let meepo_core::api::ContentBlock::Text { text } = b {
+                            Some(text.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                println!("  Claude says: {}", text.trim());
+                println!("  ✓ API connection works!\n");
+                true
             }
-            eprintln!("  Check your key and try again.\n");
-            false
+            Ok(Err(e)) => {
+                let err_str = e.to_string();
+                eprintln!("  ✗ API test failed: {}", err_str);
+                if err_str.contains("401") || err_str.contains("auth") || err_str.contains("invalid") {
+                    eprintln!("  Your API key may be incorrect or expired.");
+                }
+                eprintln!("  Check your key and try again.\n");
+                false
+            }
+            Err(_) => {
+                eprintln!("  ✗ API test timed out (>15s).");
+                eprintln!("  Check your internet connection.\n");
+                false
+            }
+        };
+        
+        if !api_ok {
+            println!("  You can still continue setup and fix the API key later.");
+            println!();
         }
-        Err(_) => {
-            eprintln!("  ✗ API test timed out (>15s).");
-            eprintln!("  Check your internet connection.\n");
-            false
-        }
-    };
+    }
 
     // ── Final Step: Summary ─────────────────────────────────────
     setup_step(total_steps, total_steps, "All Done!");
     println!();
-    if api_ok {
+    
+    // Success message
+    if use_ollama {
         println!("  ╔══════════════════════════════════════╗");
         println!("  ║       ✓ Setup complete!              ║");
+        println!("  ║     (Using Ollama provider)          ║");
         println!("  ╚══════════════════════════════════════╝");
     } else {
         println!("  ╔══════════════════════════════════════╗");
-        println!("  ║  ⚠ Setup complete (API check failed) ║");
+        println!("  ║       ✓ Setup complete!              ║");
+        println!("  ║   (Using Anthropic provider)         ║");
         println!("  ╚══════════════════════════════════════╝");
     }
     println!();
@@ -2411,22 +2558,6 @@ async fn cmd_stop() -> Result<()> {
 async fn cmd_ask(config_path: &Option<PathBuf>, message: &str) -> Result<()> {
     let cfg = MeepoConfig::load(config_path)?;
 
-    let api_key = shellexpand_str(&cfg.providers.anthropic.api_key);
-    if api_key.is_empty() || api_key.contains("${") {
-        anyhow::bail!(
-            "ANTHROPIC_API_KEY is not set.\n\n\
-             Fix it with:\n  \
-             export ANTHROPIC_API_KEY=\"sk-ant-...\"\n\n\
-             Or run the setup wizard:\n  \
-             meepo setup\n\n\
-             Get a key at: https://console.anthropic.com/settings/keys"
-        );
-    }
-    let base_url = shellexpand_str(&cfg.providers.anthropic.base_url);
-    let api = meepo_core::api::ApiClient::new(api_key, Some(cfg.agent.default_model.clone()))
-        .with_max_tokens(cfg.agent.max_tokens)
-        .with_base_url(base_url);
-
     // Load context
     let workspace = shellexpand(&cfg.memory.workspace);
     let soul = meepo_knowledge::load_soul(workspace.join(&cfg.agent.system_prompt_file))
@@ -2436,20 +2567,70 @@ async fn cmd_ask(config_path: &Option<PathBuf>, message: &str) -> Result<()> {
 
     let system = format!("{}\n\n## Current Memory\n{}", soul, memory);
 
-    let response = api
-        .chat(
-            &[meepo_core::api::ApiMessage {
+    // Determine which provider to use
+    let use_ollama = cfg.agent.default_model == "ollama";
+
+    if use_ollama {
+        // Use Ollama provider
+        let ollama_cfg = cfg.providers.ollama.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Ollama is set as default_model but providers.ollama is not configured"))?;
+        
+        let base_url = shellexpand_str(&ollama_cfg.base_url);
+        let model = shellexpand_str(&ollama_cfg.model);
+        
+        let client = meepo_core::ollama::OllamaClient::new(base_url, model)
+            .with_max_tokens(cfg.agent.max_tokens);
+        
+        let response = client.chat(
+            &[meepo_core::ollama::ChatMessage {
                 role: "user".to_string(),
-                content: meepo_core::api::MessageContent::Text(message.to_string()),
+                content: Some(message.to_string()),
+                tool_calls: None,
+                tool_call_id: None,
             }],
             &[],
             &system,
-        )
-        .await?;
+        ).await?;
 
-    for block in &response.content {
-        if let meepo_core::api::ContentBlock::Text { text } = block {
-            println!("{}", text);
+        // Extract text from first choice
+        if let Some(choice) = response.choices.first() {
+            if let Some(ref content) = choice.message.content {
+                println!("{}", content);
+            }
+        }
+    } else {
+        // Use Anthropic provider
+        let api_key = shellexpand_str(&cfg.providers.anthropic.api_key);
+        if api_key.is_empty() || api_key.contains("${") {
+            anyhow::bail!(
+                "ANTHROPIC_API_KEY is not set.\n\n\
+                 Fix it with:\n  \
+                 export ANTHROPIC_API_KEY=\"sk-ant-...\"\n\n\
+                 Or run the setup wizard:\n  \
+                 meepo setup\n\n\
+                 Get a key at: https://console.anthropic.com/settings/keys"
+            );
+        }
+        let base_url = shellexpand_str(&cfg.providers.anthropic.base_url);
+        let api = meepo_core::api::ApiClient::new(api_key, Some(cfg.agent.default_model.clone()))
+            .with_max_tokens(cfg.agent.max_tokens)
+            .with_base_url(base_url);
+
+        let response = api
+            .chat(
+                &[meepo_core::api::ApiMessage {
+                    role: "user".to_string(),
+                    content: meepo_core::api::MessageContent::Text(message.to_string()),
+                }],
+                &[],
+                &system,
+            )
+            .await?;
+
+        for block in &response.content {
+            if let meepo_core::api::ContentBlock::Text { text } = block {
+                println!("{}", text);
+            }
         }
     }
 
